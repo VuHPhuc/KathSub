@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import useStore from '../../store/subtitleStore';
 import { t } from '../../locales';
+import OllamaSetup from './OllamaSetup';
 
 const MODELS = ['tiny', 'base', 'small', 'medium'];
 const SOURCE_LANGS = [
@@ -30,14 +31,18 @@ export default function AutoTranscribe({ addToast }) {
   const [targetLang, setTargetLang] = useState('none');
   const [engine,     setEngine]     = useState('nllb');     // 'nllb' | 'ollama'
   const [outputMode, setOutputMode] = useState('translated'); // 'translated' | 'bilingual'
-  const [ollama,     setOllama]     = useState({ available: false, models: [] });
+  const [ollama,     setOllama]     = useState(null); // { installed, running, models } once checked
   const [ollamaModel, setOllamaModel] = useState('');
+  const [setupBusy,  setSetupBusy]  = useState(false); // Ollama install / start / pull in progress
   const [step,       setStep]       = useState('');
   const [progress,   setProgress]   = useState({ message: '', percent: 0 });
   const [running,    setRunning]    = useState(false);
 
   const translating = targetLang !== 'none';
   const totalSteps = translating ? 2 : 1;
+  const ollamaReady = !!(ollama?.running && ollamaModel);
+  const blocked = running || setupBusy;
+  const canStart = !blocked && !(translating && engine === 'ollama' && !ollamaReady);
 
   // Subscribe to transcribe/translate progress events
   useEffect(() => {
@@ -47,9 +52,9 @@ export default function AutoTranscribe({ addToast }) {
     return unsub;
   }, []);
 
-  // Offer Ollama only when it is running on this machine
+  // Check whether Ollama is installed / running and which models it has
   useEffect(() => {
-    window.electron.listOllamaModels?.().then((res) => {
+    window.electron.ollamaStatus?.().then((res) => {
       if (!res) return;
       setOllama(res);
       if (res.models.length) setOllamaModel(res.models[0]);
@@ -104,7 +109,7 @@ export default function AutoTranscribe({ addToast }) {
   };
 
   return (
-    <div className="modal-overlay" onClick={() => !running && setShowAutoPanel(false)}>
+    <div className="modal-overlay" onClick={() => !blocked && setShowAutoPanel(false)}>
       <div className="modal at-modal" onClick={(e) => e.stopPropagation()} id="auto-transcribe-modal">
 
         <div className="at-header">
@@ -115,7 +120,7 @@ export default function AutoTranscribe({ addToast }) {
           <button
             className="titlebar-btn"
             onClick={() => setShowAutoPanel(false)}
-            disabled={running}
+            disabled={blocked}
             aria-label={t('cancel', uiLang)}
           >
             ✕
@@ -209,7 +214,7 @@ export default function AutoTranscribe({ addToast }) {
               id="select-target-lang"
               value={targetLang}
               onChange={(e) => setTargetLang(e.target.value)}
-              disabled={running}
+              disabled={blocked}
             >
               {TARGET_LANGS.map((l) => (
                 <option key={l.code} value={l.code}>{t(l.labelKey, uiLang)}</option>
@@ -226,15 +231,14 @@ export default function AutoTranscribe({ addToast }) {
                     <button
                       className={`seg-btn${engine === 'nllb' ? ' active' : ''}`}
                       onClick={() => setEngine('nllb')}
-                      disabled={running}
+                      disabled={blocked}
                     >
                       NLLB
                     </button>
                     <button
                       className={`seg-btn${engine === 'ollama' ? ' active' : ''}`}
                       onClick={() => setEngine('ollama')}
-                      disabled={running || !ollama.models.length}
-                      title={ollama.models.length ? '' : t('ollamaMissing', uiLang)}
+                      disabled={blocked}
                     >
                       Ollama LLM
                     </button>
@@ -262,28 +266,24 @@ export default function AutoTranscribe({ addToast }) {
                 </div>
               </div>
 
-              {engine === 'ollama' && (
-                <label className="at-field">
-                  <span className="at-label">{t('ollamaModel', uiLang)}</span>
-                  <select
-                    className="studio-select"
-                    value={ollamaModel}
-                    onChange={(e) => setOllamaModel(e.target.value)}
-                    disabled={running}
-                  >
-                    {ollama.models.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
               <div className="at-hint">
                 {engine === 'nllb'
                   ? t('nllbNote', uiLang)
                   : t('ollamaNote', uiLang)}
-                {engine === 'nllb' && !ollama.models.length && <> {t('ollamaMissing', uiLang)}</>}
+                {engine === 'nllb' && !ollamaReady && <> {t('ollamaHint', uiLang)}</>}
               </div>
+
+              {engine === 'ollama' && (
+                <OllamaSetup
+                  uiLang={uiLang}
+                  status={ollama}
+                  setStatus={setOllama}
+                  model={ollamaModel}
+                  setModel={setOllamaModel}
+                  disabled={running}
+                  onBusyChange={setSetupBusy}
+                />
+              )}
             </>
           )}
         </section>
@@ -305,7 +305,7 @@ export default function AutoTranscribe({ addToast }) {
             className="btn btn-ghost"
             id="btn-cancel-transcribe"
             onClick={() => setShowAutoPanel(false)}
-            disabled={running}
+            disabled={blocked}
           >
             {t('cancel', uiLang)}
           </button>
@@ -313,7 +313,7 @@ export default function AutoTranscribe({ addToast }) {
             className="btn btn-primary at-start"
             id="btn-start-transcribe"
             onClick={handleStart}
-            disabled={running}
+            disabled={!canStart}
           >
             {running
               ? '⏳ ' + t('processing', uiLang)

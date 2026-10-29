@@ -324,12 +324,49 @@ try {
   console.error('[Translate] Failed to load service:', err.message);
 }
 
-ipcMain.handle('list-ollama-models', async () => {
-  if (!translateService) return { available: false, models: [] };
-  return translateService.listOllamaModels();
-});
-
 ipcMain.handle('translate-subtitles', async (event, data) => {
   if (!translateService) return { success: false, error: 'Translate service not available' };
   return translateService.translateSubtitles(data, (p) => sendTranscribeProgress(event, p));
+});
+
+// ─── Ollama setup ────────────────────────────────────────────────────────────
+
+let ollamaService = null;
+try {
+  ollamaService = require('./services/ollama');
+} catch (err) {
+  console.error('[Ollama] Failed to load service:', err.message);
+}
+
+function sendOllamaProgress(event, progress) {
+  if (event?.sender && !event.sender.isDestroyed()) {
+    event.sender.send('ollama-setup-progress', progress);
+  }
+}
+
+const OLLAMA_UNAVAILABLE = { success: false, error: 'Ollama service not available' };
+
+ipcMain.handle('ollama-status', async () => {
+  if (!ollamaService) return { installed: false, running: false, models: [] };
+  return ollamaService.getStatus();
+});
+
+ipcMain.handle('ollama-install', async (event) => {
+  if (!ollamaService) return OLLAMA_UNAVAILABLE;
+  return ollamaService.installOllama((p) => sendOllamaProgress(event, p));
+});
+
+ipcMain.handle('ollama-start', async () => {
+  if (!ollamaService) return OLLAMA_UNAVAILABLE;
+  return ollamaService.startOllama();
+});
+
+ipcMain.handle('ollama-pull', async (event, model) => {
+  if (!ollamaService) return OLLAMA_UNAVAILABLE;
+  return ollamaService.pullModel(model, (p) => sendOllamaProgress(event, p));
+});
+
+ipcMain.handle('ollama-cancel', async () => {
+  ollamaService?.cancelDownload();
+  return true;
 });

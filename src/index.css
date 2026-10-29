@@ -1723,3 +1723,29 @@ html, body, #root {
 @media (max-width: 560px) {
   .at-grid { grid-template-columns: 1fr; }
 }
+.at-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.at-setup-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.at-inline-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.at-inline-row .studio-select { flex: 1; min-width: 0; }
+.at-inline-btn { align-self: flex-start; padding: 7px 12px; }
+.at-error {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--danger);
+}

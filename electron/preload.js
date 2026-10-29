@@ -34,12 +34,18 @@ contextBridge.exposeInMainWorld('electron', {
   transcribeLocal: (data) => ipcRenderer.invoke('transcribe-local', data),
 
   // Translate
-  listOllamaModels:   ()     => ipcRenderer.invoke('list-ollama-models'),
   translateSubtitles: (data) => ipcRenderer.invoke('translate-subtitles', data),
+
+  // Ollama setup
+  ollamaStatus:  ()      => ipcRenderer.invoke('ollama-status'),
+  ollamaInstall: ()      => ipcRenderer.invoke('ollama-install'),
+  ollamaStart:   ()      => ipcRenderer.invoke('ollama-start'),
+  ollamaPull:    (model) => ipcRenderer.invoke('ollama-pull', model),
+  ollamaCancel:  ()      => ipcRenderer.invoke('ollama-cancel'),
 
   // Event subscriptions
   on(channel, callback) {
-    const allowed = ['burn-progress', 'transcribe-progress', 'window-state'];
+    const allowed = ['burn-progress', 'transcribe-progress', 'ollama-setup-progress', 'window-state'];
     if (!allowed.includes(channel)) return () => {};
     const fn = (_event, ...args) => callback(...args);
     ipcRenderer.on(channel, fn);
