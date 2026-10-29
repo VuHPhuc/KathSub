@@ -6,6 +6,9 @@ const MODELS = ['tiny', 'base', 'small', 'medium'];
 const LANGS  = [
   { code: 'vi',   labelKey: 'langVi' },
   { code: 'en',   labelKey: 'langEn' },
+  { code: 'ja',   labelKey: 'langJa' },
+  { code: 'ko',   labelKey: 'langKo' },
+  { code: 'zh',   labelKey: 'langZh' },
   { code: 'auto', labelKey: 'langAuto' },
 ];
 
