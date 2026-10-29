@@ -51,7 +51,9 @@ export default function Timeline() {
   const totalW = Math.max((validDuration || 1) * pixelsPerSecond, 1000);
   const playheadX = validDuration > 0 ? (currentTime / validDuration) * totalW : 0;
 
-  // Auto-scroll to keep playhead smoothly in view when playing
+  // Keep the playhead in view, turning the page like an NLE when it reaches the right edge.
+  // Instant scroll only: playback updates currentTime every animation frame, and a 'smooth'
+  // scrollTo restarted every frame never gets anywhere, so the view only caught up after pausing.
   useEffect(() => {
     if (!validDuration || activeDrag) return;
     const el = scrollRef.current;
@@ -59,17 +61,28 @@ export default function Timeline() {
     const visible = el.clientWidth;
 
     if (playheadX > el.scrollLeft + visible - 60) {
-      el.scrollTo({
-        left: Math.max(0, playheadX - 60),
-        behavior: isPlaying ? 'smooth' : 'auto',
-      });
+      el.scrollLeft = Math.max(0, playheadX - 60);
     } else if (playheadX < el.scrollLeft) {
-      el.scrollTo({
-        left: Math.max(0, playheadX - visible / 3),
-        behavior: isPlaying ? 'smooth' : 'auto',
-      });
+      el.scrollLeft = Math.max(0, playheadX - visible / 3);
     }
-  }, [playheadX, activeDrag, validDuration, isPlaying]);
+  }, [playheadX, activeDrag, validDuration]);
+
+  // Mouse wheel scrolls the timeline sideways; Ctrl + wheel zooms
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e) => {
+      e.preventDefault();
+      if (e.ctrlKey) {
+        const { pixelsPerSecond: pps, setPixelsPerSecond: setPps } = useStore.getState();
+        setPps(pps + (e.deltaY < 0 ? 15 : -15));
+      } else {
+        el.scrollLeft += e.deltaY + e.deltaX;
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [validDuration]);
 
   // Generate tick marks
   const tickStep = useMemo(() => {
