@@ -20,8 +20,8 @@ Bạn có thể tải các bản phát hành chính thức trực tiếp tại m
 
 | Tên tệp | Loại | Mô tả |
 | :--- | :---: | :--- |
-| [**KathSub Setup 1.0.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bộ cài đặt (Installer)** | Tự động cài đặt vào máy, tạo biểu tượng ngoài màn hình Desktop và menu Start. Khuyên dùng cho người dùng phổ thông. |
-| [**KathSub 1.0.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bản Portable (Chạy ngay)** | Chỉ cần nhấp đúp là mở phần mềm ngay, không cần cài đặt, có thể chép vào USB mang đi mọi nơi. |
+| [**KathSub Setup 1.1.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bộ cài đặt (Installer)** | Tự động cài đặt vào máy, tạo biểu tượng ngoài màn hình Desktop và menu Start. Khuyên dùng cho người dùng phổ thông. |
+| [**KathSub Portable 1.1.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bản Portable (Chạy ngay)** | Chỉ cần nhấp đúp là mở phần mềm ngay, không cần cài đặt, có thể chép vào USB mang đi mọi nơi. |
 
 > **Lưu ý trên máy tính cục bộ:** Các file `.exe` cài đặt cũng đã được đóng gói sẵn trong thư mục cục bộ tại:  
 > `d:\code\KathSub\release\`
@@ -45,11 +45,23 @@ Bạn có thể tải các bản phát hành chính thức trực tiếp tại m
 - Thay đổi cỡ chữ, độ dày nét viền, màu sắc, khung nền và thấy ngay kết quả thực tế (WYSIWYG).
 - Tính năng **Hút dính (Magnet Snap)** giúp căn chỉnh phụ đề vào giữa hoặc mép khung hình chuẩn xác.
 
-### 4. 🤖 Nhận dạng giọng nói tự động bằng AI Whisper
-- Tự động tách lời thoại từ video / audio sang văn bản kèm mốc thời gian chi tiết.
-- Không cần gõ thủ công từng câu, tiết kiệm đến 90% thời gian làm phụ đề.
+### 4. 🤖 Nhận diện giọng nói đa ngôn ngữ bằng AI Whisper
+- Tự động nhận dạng và tách lời thoại từ video / audio sang văn bản kèm mốc thời gian chính xác (timestamp).
+- Chạy offline 100% trong tiến trình chính (Node/Electron), bảo vệ quyền riêng tư và hoạt động mượt mà không cần GPU rời.
+- Hỗ trợ đa dạng ngôn ngữ: **Tiếng Việt (`vi`)**, **Tiếng Anh (`en`)**, **Tiếng Nhật (`ja`)**, **Tiếng Hàn (`ko`)**, **Tiếng Trung (`zh`)**.
+- Tùy chọn kích thước mô hình linh hoạt: `tiny`, `base`, `small`, `medium` phù hợp với cấu hình từng máy.
 
-### 5. ⚡ Xuất phụ đề & Render Video Hardsub
+### 5. 🌐 Dịch thuật phụ đề song ngữ AI (NLLB offline & Ollama AI)
+- Dịch tự động lời thoại từ ngôn ngữ gốc sang Tiếng Việt hoặc ngôn ngữ đích khác, tạo phụ đề song ngữ hiển thị trực quan.
+- **Dịch offline bằng NLLB (Transformers.js):** Hoạt động ngay trên CPU máy tính mà không cần kết nối Internet.
+- **Dịch qua Ollama AI cục bộ:** Kết nối linh hoạt với các mô hình ngôn ngữ lớn (LLM như Qwen 2.5, Qwen 3, Llama 3...). Tối ưu hóa suy luận (tắt thinking, JSON schema chuẩn hóa dữ liệu, cơ chế tự động dịch lại dòng lệch) giúp dịch siêu tốc và chính xác.
+
+### 6. 📦 Tích hợp cài đặt & quản lý Ollama 1-click ngay trong ứng dụng
+- Tự động kiểm tra trạng thái cài đặt Ollama trên máy tính.
+- Tải về và cài đặt Ollama an toàn với cơ chế xác thực chữ ký số Authenticode (`Ollama Inc.` / DigiCert) trước khi thực thi.
+- Khởi động dịch vụ Ollama ngầm và tải các model dịch thuật (như `qwen3:4b`, `qwen2.5:3b`) trực tiếp ngay trong giao diện ứng dụng.
+
+### 7. ⚡ Xuất phụ đề & Render Video Hardsub
 - **Xuất phụ đề rời:** Hỗ trợ định dạng chuẩn `.SRT` và Advanced SubStation Alpha (`.ASS`).
 - **Render Hardsub:** Tích hợp bộ xử lý FFmpeg render chữ trực tiếp vào video MP4 sắc nét, giữ nguyên tỷ lệ khung hình và chất lượng video gốc.
 
@@ -83,8 +95,8 @@ npm run dev
 npm run dist
 ```
 Các file cài đặt đầu ra sẽ được tạo tại thư mục `release/`:
-- `release/KathSub Setup 1.0.0.exe`
-- `release/KathSub 1.0.0.exe`
+- `release/KathSub Setup 1.1.0.exe`
+- `release/KathSub Portable 1.1.0.exe`
 
 ---
 
