@@ -20,8 +20,8 @@ Bạn có thể tải các bản phát hành chính thức trực tiếp tại m
 
 | Tên tệp | Loại | Mô tả |
 | :--- | :---: | :--- |
-| [**KathSub Setup 1.1.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bộ cài đặt (Installer)** | Tự động cài đặt vào máy, tạo biểu tượng ngoài màn hình Desktop và menu Start. Khuyên dùng cho người dùng phổ thông. |
-| [**KathSub Portable 1.1.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bản Portable (Chạy ngay)** | Chỉ cần nhấp đúp là mở phần mềm ngay, không cần cài đặt, có thể chép vào USB mang đi mọi nơi. |
+| [**KathSub Setup 1.2.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bộ cài đặt (Installer)** | Tự động cài đặt vào máy, tạo biểu tượng ngoài màn hình Desktop và menu Start. Khuyên dùng cho người dùng phổ thông. |
+| [**KathSub Portable 1.2.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bản Portable (Chạy ngay)** | Chỉ cần nhấp đúp là mở phần mềm ngay, không cần cài đặt, có thể chép vào USB mang đi mọi nơi. |
 
 > **Lưu ý trên máy tính cục bộ:** Các file `.exe` cài đặt cũng đã được đóng gói sẵn trong thư mục cục bộ tại:  
 > `d:\code\KathSub\release\`
@@ -39,11 +39,13 @@ Bạn có thể tải các bản phát hành chính thức trực tiếp tại m
 - Hỗ trợ nhiều track trực quan: Video gốc, Phụ đề lời thoại (T1), Nhãn dán / Icon (O1), Dải âm thanh (A1).
 - Playhead tracking thời gian thực (hh:mm:ss.ms) đồng bộ 2 chiều với video preview.
 - Cho phép cắt phụ đề (phím tắt `S`), co giãn hai đầu để chỉnh mốc thời gian (start/end) trực quan.
+- Timeline tự lật trang theo playhead khi đang phát; có thanh cuộn ngang, lăn chuột để cuộn, `Ctrl + lăn chuột` để thu phóng.
 
 ### 3. 🎯 Trình xem thử (Preview Overlay) Kéo thả Tức thì
 - Kéo thả tự do vị trí phụ đề ngay trên màn hình phát video.
 - Thay đổi cỡ chữ, độ dày nét viền, màu sắc, khung nền và thấy ngay kết quả thực tế (WYSIWYG).
 - Tính năng **Hút dính (Magnet Snap)** giúp căn chỉnh phụ đề vào giữa hoặc mép khung hình chuẩn xác.
+- Ghi nhớ thiết lập người dùng: font/kiểu phụ đề gần nhất, âm lượng và các lựa chọn nhận dạng/dịch được giữ lại sau khi tắt app.
 
 ### 4. 🤖 Nhận diện giọng nói đa ngôn ngữ bằng AI Whisper
 - Tự động nhận dạng và tách lời thoại từ video / audio sang văn bản kèm mốc thời gian chính xác (timestamp).
@@ -95,8 +97,8 @@ npm run dev
 npm run dist
 ```
 Các file cài đặt đầu ra sẽ được tạo tại thư mục `release/`:
-- `release/KathSub Setup 1.1.0.exe`
-- `release/KathSub Portable 1.1.0.exe`
+- `release/KathSub Setup 1.2.0.exe`
+- `release/KathSub Portable 1.2.0.exe`
 
 ---
 

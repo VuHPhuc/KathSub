@@ -1,6 +1,6 @@
 {
   "name": "kathsub",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "KathSub - Trình chỉnh sửa phụ đề video / Video Subtitle Editor",
   "main": "electron/main.js",
   "scripts": {
