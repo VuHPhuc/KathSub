@@ -86,6 +86,26 @@ async function listOllamaModels() {
   }
 }
 
+// Constrained output per line: id, the source copied back, and the translation.
+// - Separate "source"/"translation" fields: with one shared "text" field small models return the source untranslated.
+// - Echoing the source lets us detect a translation that slid onto the wrong line and redo that line alone.
+const OLLAMA_SCHEMA = {
+  type: 'object',
+  properties: {
+    lines: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { id: { type: 'integer' }, source: { type: 'string' }, translation: { type: 'string' } },
+        required: ['id', 'source', 'translation'],
+      },
+    },
+  },
+  required: ['lines'],
+};
+
+const sameText = (a, b) => String(a ?? '').replace(/\s+/g, '') === String(b ?? '').replace(/\s+/g, '');
+
 async function ollamaChat(model, system, user) {
   const res = await fetch(`${OLLAMA_URL}/api/chat`, {
     method: 'POST',
@@ -93,7 +113,9 @@ async function ollamaChat(model, system, user) {
     body: JSON.stringify({
       model,
       stream: false,
-      format: 'json',
+      // Thinking models (Qwen3) otherwise spend thousands of tokens reasoning per batch: 90 s instead of 7 s
+      think: false,
+      format: OLLAMA_SCHEMA,
       options: { temperature: 0.2 },
       messages: [
         { role: 'system', content: system },
@@ -106,7 +128,7 @@ async function ollamaChat(model, system, user) {
   return JSON.parse(data.message?.content || '{}');
 }
 
-const OLLAMA_BATCH = 20;
+const OLLAMA_BATCH = 10;
 const OLLAMA_CONTEXT = 3;
 
 async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress) {
@@ -114,27 +136,35 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress) {
     `You are a professional subtitle translator. Translate ${LANG_NAMES[srcLang]} subtitles into natural, fluent ${LANG_NAMES[tgtLang]}. ` +
     'Translate the meaning, not word by word; a sentence may be split across several lines, so read neighbouring lines. ' +
     'Keep each line short enough for a subtitle. Never merge, split, skip or reorder lines. ' +
-    'Reply ONLY with JSON: {"lines":[{"id":<number>,"text":"<translation>"}]} containing every id you were given.';
+    `For every input line output its id, its source copied exactly, and its ${LANG_NAMES[tgtLang]} "translation". ` +
+    'Never copy the source text into "translation".';
+
+  const ask = (lines, context = []) =>
+    ollamaChat(
+      model,
+      system,
+      (context.length ? `Previous lines for context only (do not translate):\n${context.join('\n')}\n\n` : '') +
+        JSON.stringify({ lines: lines.map(({ id, text }) => ({ id, source: text })) }),
+    );
 
   const results = new Array(texts.length).fill('');
   for (let start = 0; start < texts.length; start += OLLAMA_BATCH) {
     const end = Math.min(start + OLLAMA_BATCH, texts.length);
-    const context = texts.slice(Math.max(0, start - OLLAMA_CONTEXT), start);
     const lines = texts.slice(start, end).map((text, i) => ({ id: start + i, text }));
 
-    const user =
-      (context.length ? `Previous lines for context (do not translate):\n${context.join('\n')}\n\n` : '') +
-      `Translate these lines:\n${JSON.stringify({ lines })}`;
+    // Report at the start of each batch too, so the dialog never sits on "preparing" while the model works
+    onProgress?.({ status: 'translating', done: start, total: texts.length, batchEnd: end });
 
-    const reply = await ollamaChat(model, system, user);
-    const byId = new Map((reply.lines || []).map((l) => [Number(l.id), String(l.text ?? '').trim()]));
+    const reply = await ask(lines, texts.slice(Math.max(0, start - OLLAMA_CONTEXT), start));
+    const byId = new Map((reply.lines || []).map((l) => [Number(l.id), l]));
 
     for (const { id, text } of lines) {
-      // Model dropped a line → translate that one on its own so timing stays aligned
-      let translated = byId.get(id);
+      // Dropped line or a translation attached to the wrong source → redo that line alone so timing stays aligned
+      const got = byId.get(id);
+      let translated = got && sameText(got.source, text) ? String(got.translation ?? '').trim() : '';
       if (!translated) {
-        const single = await ollamaChat(model, system, `Translate these lines:\n${JSON.stringify({ lines: [{ id, text }] })}`);
-        translated = String(single.lines?.[0]?.text ?? '').trim() || text;
+        const single = await ask([{ id, text }]);
+        translated = String(single.lines?.[0]?.translation ?? '').trim() || text;
       }
       results[id] = translated;
     }
@@ -161,7 +191,9 @@ async function translateSubtitles({ subtitles, sourceLang, targetLang, engine, o
       if (p.status !== 'translating') return onProgress?.(p);
       onProgress?.({
         status: 'translating',
-        message: `Đang dịch ${p.done}/${p.total} dòng...`,
+        message: p.batchEnd
+          ? `Đang dịch dòng ${p.done + 1}–${p.batchEnd} / ${p.total}...`
+          : `Đã dịch ${p.done}/${p.total} dòng`,
         percent: Math.round((p.done / p.total) * 100),
       });
     };
