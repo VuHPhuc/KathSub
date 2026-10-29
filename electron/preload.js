@@ -43,9 +43,14 @@ contextBridge.exposeInMainWorld('electron', {
   ollamaPull:    (model) => ipcRenderer.invoke('ollama-pull', model),
   ollamaCancel:  ()      => ipcRenderer.invoke('ollama-cancel'),
 
+  // App updates
+  updateDownload: () => ipcRenderer.invoke('update-download'),
+  updateInstall:  () => ipcRenderer.invoke('update-install'),
+  updateOpenPage: () => ipcRenderer.invoke('update-open-page'),
+
   // Event subscriptions
   on(channel, callback) {
-    const allowed = ['burn-progress', 'transcribe-progress', 'ollama-setup-progress', 'window-state'];
+    const allowed = ['burn-progress', 'transcribe-progress', 'ollama-setup-progress', 'window-state', 'update-status'];
     if (!allowed.includes(channel)) return () => {};
     const fn = (_event, ...args) => callback(...args);
     ipcRenderer.on(channel, fn);

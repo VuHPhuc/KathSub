@@ -7,6 +7,7 @@ import SubtitlePanel from './components/SubtitlePanel/SubtitlePanel';
 import Timeline from './components/Timeline/Timeline';
 import AutoTranscribe from './components/AutoTranscribe/AutoTranscribe';
 import Toast from './components/Toast/Toast';
+import UpdateNotice from './components/UpdateNotice/UpdateNotice';
 import {
   IconFilm,
   IconFolder,
@@ -99,6 +100,7 @@ export default function App() {
         <SubtitlePanel addToast={addToast} />
       </div>
       {showAutoPanel && <AutoTranscribe addToast={addToast} />}
+      <UpdateNotice />
       <Toast toasts={toasts} />
     </div>
   );

@@ -67,6 +67,11 @@ Bạn có thể tải các bản phát hành chính thức trực tiếp tại m
 - **Xuất phụ đề rời:** Hỗ trợ định dạng chuẩn `.SRT` và Advanced SubStation Alpha (`.ASS`).
 - **Render Hardsub:** Tích hợp bộ xử lý FFmpeg render chữ trực tiếp vào video MP4 sắc nét, giữ nguyên tỷ lệ khung hình và chất lượng video gốc.
 
+### 8. 🔔 Tự động cập nhật
+- Mỗi lần mở app, KathSub kiểm tra GitHub Releases và hiện thông báo khi có phiên bản mới.
+- Bản cài đặt (Setup): bấm **Cập nhật** để tải ngay trong app, xong thì **Khởi động lại & cập nhật** (hoặc để app tự cài khi thoát).
+- Bản Portable không tự thay thế được chính nó, nên thông báo chỉ mở trang tải bản mới.
+
 ---
 
 ## 🚀 Hướng dẫn phát triển từ mã nguồn (Developers)
@@ -97,8 +102,14 @@ npm run dev
 npm run dist
 ```
 Các file cài đặt đầu ra sẽ được tạo tại thư mục `release/`:
-- `release/KathSub Setup 1.2.0.exe`
-- `release/KathSub Portable 1.2.0.exe`
+- `release/KathSub-Setup-<version>.exe` (kèm `KathSub-Setup-<version>.exe.blockmap`)
+- `release/KathSub Portable <version>.exe`
+- `release/latest.yml`
+
+### Phát hành bản mới (để tính năng tự cập nhật hoạt động)
+1. Tăng `version` trong `package.json`, chạy `npm run dist`.
+2. Tạo GitHub Release với tag `v<version>` và tải lên **cả 4 file**: `latest.yml`, `KathSub-Setup-<version>.exe`, `KathSub-Setup-<version>.exe.blockmap`, `KathSub Portable <version>.exe`.
+3. Giữ nguyên tên `KathSub-Setup-<version>.exe` (có dấu gạch ngang) vì `latest.yml` trỏ đúng tên này. Thiếu `latest.yml` thì bản cài đặt sẽ không thấy bản mới.
 
 ---
 

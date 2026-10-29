@@ -23,6 +23,13 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow = null;
 
+let updaterService = null;
+try {
+  updaterService = require('./services/updater');
+} catch (err) {
+  console.error('[Updater] Failed to load service:', err.message);
+}
+
 function createWindow() {
   const preloadPath = path.join(__dirname, 'preload.js');
   console.log('[Main] Preload path:', preloadPath);
@@ -175,6 +182,16 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+
+  // Check for a newer release once the UI is up, so the notice has somewhere to appear
+  if (updaterService) {
+    updaterService.init((status) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-status', status);
+    });
+    mainWindow.webContents.once('did-finish-load', () => {
+      setTimeout(() => updaterService.checkForUpdates(), 3000);
+    });
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -368,5 +385,22 @@ ipcMain.handle('ollama-pull', async (event, model) => {
 
 ipcMain.handle('ollama-cancel', async () => {
   ollamaService?.cancelDownload();
+  return true;
+});
+
+// ─── App updates ─────────────────────────────────────────────────────────────
+
+ipcMain.handle('update-download', async () => {
+  if (!updaterService) return { success: false, error: 'Updater not available' };
+  return updaterService.downloadUpdate();
+});
+
+ipcMain.handle('update-install', async () => {
+  updaterService?.installUpdate();
+  return true;
+});
+
+ipcMain.handle('update-open-page', async () => {
+  updaterService?.openReleasePage();
   return true;
 });
