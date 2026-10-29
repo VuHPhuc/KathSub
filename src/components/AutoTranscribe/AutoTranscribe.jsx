@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import useStore from '../../store/subtitleStore';
 import { t } from '../../locales';
 import OllamaSetup from './OllamaSetup';
+import { loadPref, savePref } from '../../utils/prefs';
 
 const MODELS = ['tiny', 'base', 'small', 'medium'];
 const SOURCE_LANGS = [
@@ -22,17 +23,22 @@ const TARGET_LANGS = [
 ];
 
 export default function AutoTranscribe({ addToast }) {
-  const { videoPath, setShowAutoPanel, setSubtitles, language: uiLang } = useStore();
+  const { videoPath, setShowAutoPanel, setSubtitles, subtitleStyle, language: uiLang } = useStore();
 
-  const [transcribeMode, setTranscribeMode] = useState('local'); // 'cloud' | 'local'
+  // Last choices are remembered across restarts (the API key is not stored)
+  const [saved] = useState(() => loadPref('transcribeOptions', {
+    transcribeMode: 'local', modelSize: 'small', subLang: 'auto', targetLang: 'none',
+    engine: 'nllb', outputMode: 'translated', ollamaModel: '',
+  }));
+  const [transcribeMode, setTranscribeMode] = useState(saved.transcribeMode); // 'cloud' | 'local'
   const [apiKey,     setApiKey]     = useState('');
-  const [modelSize,  setModelSize]  = useState('small');
-  const [subLang,    setSubLang]    = useState('auto');
-  const [targetLang, setTargetLang] = useState('none');
-  const [engine,     setEngine]     = useState('nllb');     // 'nllb' | 'ollama'
-  const [outputMode, setOutputMode] = useState('translated'); // 'translated' | 'bilingual'
+  const [modelSize,  setModelSize]  = useState(saved.modelSize);
+  const [subLang,    setSubLang]    = useState(saved.subLang);
+  const [targetLang, setTargetLang] = useState(saved.targetLang);
+  const [engine,     setEngine]     = useState(saved.engine);     // 'nllb' | 'ollama'
+  const [outputMode, setOutputMode] = useState(saved.outputMode); // 'translated' | 'bilingual'
   const [ollama,     setOllama]     = useState(null); // { installed, running, models } once checked
-  const [ollamaModel, setOllamaModel] = useState('');
+  const [ollamaModel, setOllamaModel] = useState(saved.ollamaModel);
   const [setupBusy,  setSetupBusy]  = useState(false); // Ollama install / start / pull in progress
   const [step,       setStep]       = useState('');
   const [progress,   setProgress]   = useState({ message: '', percent: 0 });
@@ -57,9 +63,14 @@ export default function AutoTranscribe({ addToast }) {
     window.electron.ollamaStatus?.().then((res) => {
       if (!res) return;
       setOllama(res);
-      if (res.models.length) setOllamaModel(res.models[0]);
+      // Keep the remembered model if it is still installed
+      setOllamaModel((cur) => (res.models.includes(cur) ? cur : res.models[0] ?? ''));
     });
   }, []);
+
+  useEffect(() => {
+    savePref('transcribeOptions', { transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel });
+  }, [transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel]);
 
   const handleStart = async () => {
     if (!videoPath) return;
@@ -83,23 +94,28 @@ export default function AutoTranscribe({ addToast }) {
       if (!result.success) throw new Error(result.error);
       if (!result.subtitles.length) throw new Error(t('noSpeech', uiLang));
 
+      // Generated lines use the font / style the user last set
+      let subtitles = result.subtitles.map((s) => ({ ...s, ...subtitleStyle }));
+
       // Step 2: Translate
       if (translating) {
         setStep(`${t('step', uiLang)} 2/2 · ${t('stepTranslate', uiLang)}`);
         setProgress({ message: t('preparingTranslate', uiLang), percent: 0 });
-        result = await window.electron.translateSubtitles({
-          subtitles: result.subtitles,
+        const translated = await window.electron.translateSubtitles({
+          subtitles,
           sourceLang: result.language || subLang,
           targetLang,
           engine,
           ollamaModel,
           outputMode,
         });
-        if (!result.success) throw new Error(result.error);
+        // A failed translation must not throw away a finished transcription
+        if (translated.success) subtitles = translated.subtitles;
+        else addToast(`${t('translateFailed', uiLang)} ${translated.error}`, 'error');
       }
 
-      setSubtitles(result.subtitles);
-      addToast(`${t('transcribeDone', uiLang)} ${result.subtitles.length}`, 'success');
+      setSubtitles(subtitles);
+      addToast(`${t('transcribeDone', uiLang)} ${subtitles.length}`, 'success');
       setShowAutoPanel(false);
     } catch (err) {
       addToast(`${t('error', uiLang)}: ${err.message}`, 'error');

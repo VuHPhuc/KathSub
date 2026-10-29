@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import useStore from '../../store/subtitleStore';
 import SubtitleOverlay from '../SubtitleOverlay/SubtitleOverlay';
+import { loadPref, savePref } from '../../utils/prefs';
 
 function formatTime(s) {
   const h = Math.floor(s / 3600);
@@ -22,8 +23,19 @@ export default function VideoPlayer({ addToast }) {
     selectedId, selectSubtitle,
   } = useStore();
 
-  const [volume, setVolume] = useState(1);
-  const [isMuted, setIsMuted] = useState(false);
+  const [volume, setVolume] = useState(() => loadPref('volume', 1));
+  const [isMuted, setIsMuted] = useState(() => loadPref('muted', false));
+
+  // Remember the user's volume and apply it to every video they open
+  useEffect(() => {
+    savePref('volume', volume);
+    savePref('muted', isMuted);
+    const vid = videoRef.current;
+    if (vid) {
+      vid.volume = volume;
+      vid.muted = isMuted;
+    }
+  }, [volume, isMuted, videoUrl]);
   const [videoDims, setVideoDims] = useState({ w: 0, h: 0, x: 0, y: 0 });
 
   // ── Video dimensions (for overlay positioning) ────────────────────────────────
@@ -174,16 +186,10 @@ export default function VideoPlayer({ addToast }) {
   const handleVolume = (e) => {
     const v = parseFloat(e.target.value);
     setVolume(v);
-    if (videoRef.current) videoRef.current.volume = v;
     setIsMuted(v === 0);
   };
 
-  const toggleMute = () => {
-    const vid = videoRef.current;
-    if (!vid) return;
-    vid.muted = !vid.muted;
-    setIsMuted(vid.muted);
-  };
+  const toggleMute = () => setIsMuted((m) => !m);
 
   const skip = useCallback((delta) => {
     const vid = videoRef.current;

@@ -1,4 +1,31 @@
 import { create } from 'zustand';
+import { loadPref, savePref } from '../utils/prefs';
+
+// Style fields a subtitle carries; the last style the user set is remembered for new subtitles
+export const STYLE_KEYS = [
+  'x', 'y', 'fontSize', 'fontFamily', 'color', 'hasBox', 'backgroundColor',
+  'bold', 'italic', 'outlineColor', 'outlineWidth',
+];
+
+const DEFAULT_SUBTITLE_STYLE = {
+  x: 50,
+  y: 84,
+  fontSize: 26,
+  fontFamily: 'Montserrat',
+  color: '#ffffff',
+  hasBox: false,
+  backgroundColor: '#000000',
+  bold: true,
+  italic: false,
+  outlineColor: '#000000',
+  outlineWidth: 2,
+};
+
+function pickStyle(sub) {
+  const style = {};
+  for (const k of STYLE_KEYS) if (sub[k] !== undefined) style[k] = sub[k];
+  return style;
+}
 
 const useStore = create((set, get) => ({
   // ── Video ──────────────────────────────────────────────────────────────────
@@ -40,6 +67,13 @@ const useStore = create((set, get) => ({
   // ── Subtitles ──────────────────────────────────────────────────────────────
   subtitles: [],
   selectedId: null,
+  subtitleStyle: loadPref('subtitleStyle', DEFAULT_SUBTITLE_STYLE),
+
+  rememberSubtitleStyle: (sub) => {
+    const subtitleStyle = { ...get().subtitleStyle, ...pickStyle(sub) };
+    savePref('subtitleStyle', subtitleStyle);
+    set({ subtitleStyle });
+  },
 
   addSubtitle: (sub) =>
     set((s) => ({
@@ -50,7 +84,7 @@ const useStore = create((set, get) => ({
     })),
 
   addSubtitleAtTime: (currentTime, duration) => {
-    const { subtitles, selectedId, selectedTrackType } = get();
+    const { subtitles, selectedId, selectedTrackType, subtitleStyle } = get();
     const id = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const dur = duration || 300;
     const start = Math.max(0, Math.round(currentTime * 100) / 100);
@@ -75,17 +109,9 @@ const useStore = create((set, get) => ({
       startTime: start,
       endTime: Math.max(start + 0.5, end),
       text: 'Phụ đề mới...',
-      x: sourceSub?.x ?? 50,
-      y: sourceSub?.y ?? 84,
-      fontSize: sourceSub?.fontSize ?? 26,
-      fontFamily: sourceSub?.fontFamily || 'Montserrat',
-      color: sourceSub?.color || '#ffffff',
-      hasBox: sourceSub?.hasBox ?? false,
-      backgroundColor: sourceSub?.backgroundColor ?? '#000000',
-      bold: sourceSub?.bold ?? true,
-      italic: sourceSub?.italic ?? false,
-      outlineColor: sourceSub?.outlineColor ?? '#000000',
-      outlineWidth: sourceSub?.outlineWidth ?? 2,
+      // No subtitle to inherit from (new video) → the style the user last set
+      ...subtitleStyle,
+      ...(sourceSub ? pickStyle(sourceSub) : {}),
     };
     set((s) => ({
       subtitles: [...s.subtitles, sub].sort((a, b) => a.startTime - b.startTime),
@@ -146,15 +172,18 @@ const useStore = create((set, get) => ({
     set((s) => ({
       subtitles: s.subtitles.map((sub) => ({ ...sub, ...stylePatch })),
     }));
+    get().rememberSubtitleStyle(stylePatch);
     return true;
   },
 
-  updateSubtitle: (id, patch) =>
+  updateSubtitle: (id, patch) => {
     set((s) => ({
       subtitles: s.subtitles
         .map((sub) => (sub.id === id ? { ...sub, ...patch } : sub))
         .sort((a, b) => a.startTime - b.startTime),
-    })),
+    }));
+    if (STYLE_KEYS.some((k) => k in patch)) get().rememberSubtitleStyle(patch);
+  },
 
   deleteSubtitle: (id) =>
     set((s) => ({

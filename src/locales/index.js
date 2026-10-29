@@ -97,6 +97,7 @@ const T = {
     transcribeDone: 'Xong! Số dòng phụ đề:',
     needApiKey: 'Vui lòng nhập OpenAI API Key!',
     noSpeech: 'Không nhận dạng được lời nói nào trong video',
+    translateFailed: 'Dịch lỗi, đã giữ phụ đề gốc:',
   },
   en: {
     appName: 'KathSub',
@@ -186,6 +187,7 @@ const T = {
     transcribeDone: 'Done! Subtitle lines:',
     needApiKey: 'Please enter your OpenAI API Key!',
     noSpeech: 'No speech was recognised in this video',
+    translateFailed: 'Translation failed, kept the original subtitles:',
   },
 };
 
