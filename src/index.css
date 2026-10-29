@@ -1620,3 +1620,106 @@ html, body, #root {
 }
 .toast.success { border-color: rgba(16, 185, 129, 0.5); }
 .toast.error   { border-color: rgba(239, 68, 68, 0.5); }
+
+/* ─── Auto Transcribe dialog ─────────────────────────────────────────────────── */
+.at-modal {
+  width: 520px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.at-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.at-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.at-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.at-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+.at-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.at-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 99px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+.at-seg { align-self: flex-start; }
+.at-seg .seg-btn { padding: 6px 14px; }
+.at-seg .seg-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.at-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.at-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.at-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.at-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.at-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.at-progress-step {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.at-progress-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.at-progress-bar { width: 100%; }
+.at-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.at-start { padding: 8px 16px; }
+
+@media (max-width: 560px) {
+  .at-grid { grid-template-columns: 1fr; }
+}

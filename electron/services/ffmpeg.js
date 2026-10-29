@@ -194,7 +194,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 async function extractAudio(videoPath) {
   const outputPath = path.join(os.tmpdir(), `kathsub_audio_${Date.now()}.wav`);
 
-  return new Promise((resolve, reject) => {
+  // Always resolve: a rejected IPC promise left the transcribe dialog stuck in "processing"
+  return new Promise((resolve) => {
     ffmpeg(videoPath)
       .noVideo()
       .audioFrequency(16000)
@@ -202,7 +203,10 @@ async function extractAudio(videoPath) {
       .audioCodec('pcm_s16le')
       .output(outputPath)
       .on('end', () => resolve({ success: true, audioPath: outputPath }))
-      .on('error', (err) => reject({ success: false, error: err.message }))
+      .on('error', (err) => {
+        tryUnlink(outputPath);
+        resolve({ success: false, error: err.message });
+      })
       .run();
   });
 }

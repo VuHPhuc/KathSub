@@ -33,6 +33,10 @@ contextBridge.exposeInMainWorld('electron', {
   transcribeApi:   (data) => ipcRenderer.invoke('transcribe-api', data),
   transcribeLocal: (data) => ipcRenderer.invoke('transcribe-local', data),
 
+  // Translate
+  listOllamaModels:   ()     => ipcRenderer.invoke('list-ollama-models'),
+  translateSubtitles: (data) => ipcRenderer.invoke('translate-subtitles', data),
+
   // Event subscriptions
   on(channel, callback) {
     const allowed = ['burn-progress', 'transcribe-progress', 'window-state'];

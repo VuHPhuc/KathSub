@@ -282,24 +282,54 @@ try {
   console.error('[Whisper] Failed to load service:', err.message);
 }
 
+function sendTranscribeProgress(event, progress) {
+  if (event?.sender && !event.sender.isDestroyed()) {
+    event.sender.send('transcribe-progress', progress);
+  }
+}
+
+// The WAV from extract-audio is only needed for one transcription; only ever delete our own temp files
+function removeTempAudio(audioPath) {
+  const name = path.basename(audioPath || '');
+  if (!name.startsWith('kathsub_audio_') || path.dirname(audioPath) !== require('os').tmpdir()) return;
+  fs.unlink(audioPath, (err) => {
+    if (err) console.warn('[Whisper] Could not delete temp audio:', err.message);
+  });
+}
+
 ipcMain.handle('transcribe-api', async (event, { audioPath, apiKey, language }) => {
   if (!whisperService) return { success: false, error: 'Whisper service not available' };
-  return whisperService.transcribeWithAPI(audioPath, apiKey, language, (progress) => {
-    try {
-      if (event?.sender && !event.sender.isDestroyed()) {
-        event.sender.send('transcribe-progress', progress);
-      }
-    } catch (_) {}
-  });
+  try {
+    return await whisperService.transcribeWithAPI(audioPath, apiKey, language, (p) => sendTranscribeProgress(event, p));
+  } finally {
+    removeTempAudio(audioPath);
+  }
 });
 
 ipcMain.handle('transcribe-local', async (event, { audioPath, modelSize, language }) => {
   if (!whisperService) return { success: false, error: 'Whisper service not available' };
-  return whisperService.transcribeLocal(audioPath, modelSize, language, (progress) => {
-    try {
-      if (event?.sender && !event.sender.isDestroyed()) {
-        event.sender.send('transcribe-progress', progress);
-      }
-    } catch (_) {}
-  });
+  try {
+    return await whisperService.transcribeLocal(audioPath, modelSize, language, (p) => sendTranscribeProgress(event, p));
+  } finally {
+    removeTempAudio(audioPath);
+  }
+});
+
+// ─── Translate ───────────────────────────────────────────────────────────────
+
+let translateService = null;
+try {
+  translateService = require('./services/translate');
+} catch (err) {
+  console.error('[Translate] Failed to load service:', err.message);
+}
+
+ipcMain.handle('list-ollama-models', async () => {
+  if (!translateService) return { available: false, models: [] };
+  return translateService.listOllamaModels();
+});
+
+ipcMain.handle('translate-subtitles', async (event, data) => {
+  if (!translateService) return { success: false, error: 'Translate service not available' };
+  return translateService.translateSubtitles(data, (p) => sendTranscribeProgress(event, p));
 });

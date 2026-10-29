@@ -47,6 +47,27 @@ function readWavAsFloat32(audioPath) {
   throw new Error('Không tìm thấy dữ liệu audio trong file WAV');
 }
 
+// Letting Whisper guess the language per 30 s chunk (language: null) makes transformers.js v2
+// loop on one token for the whole file. Detect once instead: decode a single token after
+// <|startoftranscript|> on the first 30 s that contain sound, which is the language token.
+async function detectLanguage(pipe, audio) {
+  const SR = 16000;
+  let start = 0;
+  while (start < audio.length && Math.abs(audio[start]) < 0.02) start++;
+  if (start >= audio.length) start = 0;
+
+  const { input_features } = await pipe.processor(audio.subarray(start, start + 30 * SR));
+  const out = await pipe.model.generate(input_features, {
+    max_new_tokens: 1,
+    forced_decoder_ids: null,
+    return_timestamps: false,
+  });
+  const ids = Array.from(out[0] ?? out, Number);
+  const token = pipe.tokenizer.model.vocab[ids[ids.length - 1]] ?? '';
+  const match = /^<\|([a-z]{2,3})\|>$/.exec(token);
+  return match ? match[1] : null;
+}
+
 function makeId() {
   return `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
@@ -160,13 +181,31 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
 
     const audio = readWavAsFloat32(audioPath);
 
+    let lang = language && language !== 'auto' ? language : null;
+    if (!lang) {
+      onProgress?.({ status: 'detecting', message: 'Đang nhận biết ngôn ngữ...', percent: 58 });
+      lang = await detectLanguage(localPipeline, audio);
+    }
+
+    // transformers.js advances each 30 s window by 30 - 2 * 5 = 20 s
+    const totalChunks = Math.max(1, Math.ceil(audio.length / (16000 * 20)));
+    let doneChunks = 0;
+
     // Chunking options belong to the call, not pipeline(); without them only the first 30 s is transcribed
     const result = await localPipeline(audio, {
-      language: language && language !== 'auto' ? language : null,
+      language: lang,
       return_timestamps: true,
       task: 'transcribe',
       chunk_length_s: 30,
       stride_length_s: 5,
+      chunk_callback: () => {
+        doneChunks = Math.min(doneChunks + 1, totalChunks);
+        onProgress?.({
+          status: 'transcribing',
+          message: `Đang nhận dạng giọng nói... ${Math.round((doneChunks / totalChunks) * 100)}%`,
+          percent: Math.round(60 + (doneChunks / totalChunks) * 34),
+        });
+      },
     });
 
     onProgress?.({ status: 'processing', message: 'Đang xử lý kết quả...', percent: 95 });
@@ -180,7 +219,7 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
 
     const subtitles = buildSubtitles(segments);
     onProgress?.({ status: 'done', message: 'Hoàn thành!', percent: 100 });
-    return { success: true, subtitles };
+    return { success: true, subtitles, language: lang };
   } catch (err) {
     // Reset pipeline so next call tries again fresh
     localPipeline = null;
