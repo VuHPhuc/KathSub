@@ -68,6 +68,44 @@ async function detectLanguage(pipe, audio) {
   return match ? match[1] : null;
 }
 
+// Whisper hallucinates loops on music, moans or noise ("ああああ…", "ねえ、ねえ、ねえ…") that can fill a
+// whole 30 s window. Keep at most 3 copies of any short run; a 400-char loop also makes Ollama abort
+// with "token repeat limit reached", which used to throw away the whole job.
+function collapseRepeats(text) {
+  return text.replace(/(.{1,20}?)\1{3,}/gs, '$1$1$1');
+}
+
+// A line much longer than a spoken sentence means Whisper stuck one text (often a hallucinated loop)
+// over a whole stretch of moans, music or noise. Re-transcribe that stretch in short independent
+// windows so each sound gets its own line with its own timing; quiet windows produce no line.
+const MAX_SEGMENT_S = 8;
+const RESPLIT_WINDOW_S = 5;
+
+function rms(samples) {
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+  return Math.sqrt(sum / (samples.length || 1));
+}
+
+async function resplitLongSegment(pipe, audio, start, end, lang) {
+  const SR = 16000;
+  const round = (t) => Math.round(t * 100) / 100;
+  const out = [];
+  for (let winStart = start; winStart < end - 0.3; winStart += RESPLIT_WINDOW_S) {
+    const winEnd = Math.min(end, winStart + RESPLIT_WINDOW_S);
+    const slice = audio.subarray(Math.floor(winStart * SR), Math.floor(winEnd * SR));
+    if (rms(slice) < 0.01) continue;
+
+    const r = await pipe(slice, { language: lang, task: 'transcribe', return_timestamps: true });
+    for (const c of r.chunks ?? []) {
+      const s = winStart + (c.timestamp?.[0] ?? 0);
+      const e = Math.min(winEnd, winStart + (c.timestamp?.[1] ?? winEnd - winStart));
+      if (e > s) out.push({ startTime: round(s), endTime: round(e), text: c.text });
+    }
+  }
+  return out;
+}
+
 function makeId() {
   return `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
@@ -79,7 +117,7 @@ function buildSubtitles(segments) {
       id: makeId(),
       startTime: s.startTime ?? s.start ?? 0,
       endTime:   s.endTime   ?? s.end   ?? (s.start ?? 0) + 3,
-      text: s.text.trim(),
+      text: collapseRepeats(s.text.trim()),
       x: 50,
       y: 85,
       fontSize: 24,
@@ -210,12 +248,16 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
 
     onProgress?.({ status: 'processing', message: 'Đang xử lý kết quả...', percent: 95 });
 
-    const chunks = result.chunks ?? [];
-    const segments = chunks.map((c) => ({
-      startTime: c.timestamp?.[0] ?? 0,
-      endTime:   c.timestamp?.[1] ?? (c.timestamp?.[0] ?? 0) + 3,
-      text: c.text,
-    }));
+    const segments = [];
+    for (const c of result.chunks ?? []) {
+      const startTime = c.timestamp?.[0] ?? 0;
+      const endTime   = c.timestamp?.[1] ?? startTime + 3;
+      if (endTime - startTime > MAX_SEGMENT_S) {
+        segments.push(...(await resplitLongSegment(localPipeline, audio, startTime, endTime, lang)));
+      } else {
+        segments.push({ startTime, endTime, text: c.text });
+      }
+    }
 
     const subtitles = buildSubtitles(segments);
     onProgress?.({ status: 'done', message: 'Hoàn thành!', percent: 100 });

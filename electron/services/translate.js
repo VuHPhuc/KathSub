@@ -155,7 +155,13 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress) {
     // Report at the start of each batch too, so the dialog never sits on "preparing" while the model works
     onProgress?.({ status: 'translating', done: start, total: texts.length, batchEnd: end });
 
-    const reply = await ask(lines, texts.slice(Math.max(0, start - OLLAMA_CONTEXT), start));
+    // A failed batch (e.g. Ollama 500 "token repeat limit reached") falls through to per-line retries below
+    let reply = {};
+    try {
+      reply = await ask(lines, texts.slice(Math.max(0, start - OLLAMA_CONTEXT), start));
+    } catch (err) {
+      console.warn('[Translate] Ollama batch failed, retrying line by line:', err.message);
+    }
     const byId = new Map((reply.lines || []).map((l) => [Number(l.id), l]));
 
     for (const { id, text } of lines) {
@@ -163,8 +169,14 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress) {
       const got = byId.get(id);
       let translated = got && sameText(got.source, text) ? String(got.translation ?? '').trim() : '';
       if (!translated) {
-        const single = await ask([{ id, text }]);
-        translated = String(single.lines?.[0]?.translation ?? '').trim() || text;
+        try {
+          const single = await ask([{ id, text }]);
+          translated = String(single.lines?.[0]?.translation ?? '').trim();
+        } catch (err) {
+          // One untranslatable line must not discard the whole transcription; keep the source text
+          console.warn(`[Translate] Ollama failed on line ${id}, keeping source:`, err.message);
+        }
+        translated = translated || text;
       }
       results[id] = translated;
     }
