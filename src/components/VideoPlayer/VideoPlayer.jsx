@@ -126,7 +126,7 @@ export default function VideoPlayer({ addToast }) {
       vid.src = fallbackUrl;
       vid.load();
     } else {
-      addToast && addToast('❌ Không thể tải video. Hãy thử file MP4 khác.', 'error');
+      addToast && addToast('Không thể tải video. Hãy thử file MP4 khác.', 'error');
     }
   }, [addToast]);
 

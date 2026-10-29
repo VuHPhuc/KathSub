@@ -62,10 +62,10 @@ export default function App() {
         if (filePath) {
           setVideo(filePath);
         } else {
-          addToast('❌ Không đọc được đường dẫn file. Hãy dùng nút "Mở video".', 'error');
+          addToast('Không đọc được đường dẫn file. Hãy dùng nút "Mở video".', 'error');
         }
       } else {
-        addToast('❌ Chỉ hỗ trợ file video (MP4, MKV, AVI, MOV...)', 'error');
+        addToast('Chỉ hỗ trợ file video (MP4, MKV, AVI, MOV...)', 'error');
       }
     };
 
@@ -142,7 +142,7 @@ function DropZone({ isDragging, addToast }) {
 
     // Safety check — only available inside Electron
     if (!window.electron) {
-      addToast('❌ Electron API không khả dụng. Bạn đang chạy trong browser?', 'error');
+      addToast('Electron API không khả dụng. Bạn đang chạy trong browser?', 'error');
       return;
     }
 
@@ -153,7 +153,7 @@ function DropZone({ isDragging, addToast }) {
       }
     } catch (err) {
       console.error('openVideo error:', err);
-      addToast('❌ Không mở được dialog: ' + err.message, 'error');
+      addToast('Không mở được dialog: ' + err.message, 'error');
     }
   };
 

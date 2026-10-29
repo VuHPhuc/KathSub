@@ -87,8 +87,8 @@ export default function Toolbar({ addToast }) {
     );
     if (!savePath) return;
     const result = await window.electron.exportSubtitle({ subtitles, outputPath: savePath, format: 'srt' });
-    if (result.success) addToast('✅ Đã xuất file SRT thành công!', 'success');
-    else addToast(`❌ Lỗi: ${result.error}`, 'error');
+    if (result.success) addToast('Đã xuất file SRT thành công!', 'success');
+    else addToast(`Lỗi: ${result.error}`, 'error');
   };
 
   // ── Export VTT ──────────────────────────────────────────────────────────────
@@ -102,8 +102,8 @@ export default function Toolbar({ addToast }) {
     );
     if (!savePath) return;
     const result = await window.electron.exportSubtitle({ subtitles, outputPath: savePath, format: 'vtt' });
-    if (result.success) addToast('✅ Đã xuất file VTT thành công!', 'success');
-    else addToast(`❌ Lỗi: ${result.error}`, 'error');
+    if (result.success) addToast('Đã xuất file VTT thành công!', 'success');
+    else addToast(`Lỗi: ${result.error}`, 'error');
   };
 
   // ── Burn subtitles & overlays into final MP4 ─────────────────────────────────
@@ -139,12 +139,12 @@ export default function Toolbar({ addToast }) {
       });
 
       if (result.success) {
-        addToast(`✅ Xuất video thành công: ${outputPath}`, 'success');
+        addToast(`Xuất video thành công: ${outputPath}`, 'success');
       } else {
-        addToast(`❌ Lỗi khi xuất video: ${result.error}`, 'error');
+        addToast(`Lỗi khi xuất video: ${result.error}`, 'error');
       }
     } catch (err) {
-      addToast(`❌ Lỗi xuất video: ${err.message}`, 'error');
+      addToast(`Lỗi xuất video: ${err.message}`, 'error');
     } finally {
       setIsExporting(false);
       setExportProgress(0);
@@ -162,7 +162,7 @@ export default function Toolbar({ addToast }) {
       }
     } catch (err) {
       console.error('openVideo toolbar error:', err);
-      addToast('❌ Không thể mở video', 'error');
+      addToast('Không thể mở video', 'error');
     }
   };
 
