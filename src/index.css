@@ -1720,6 +1720,7 @@ html, body, #root {
   font-weight: 500;
   color: var(--text-secondary);
 }
+.at-switch { margin-top: 10px; gap: 12px; }
 .at-hint {
   font-size: 11px;
   line-height: 1.5;

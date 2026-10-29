@@ -1,4 +1,4 @@
-// Whisper service — supports OpenAI API (cloud) and @xenova/transformers (local)
+// Whisper service — supports OpenAI API (cloud) and @huggingface/transformers v3 (local)
 // Both are loaded via dynamic import to avoid CommonJS/ESM conflicts.
 
 let localPipeline = null;  // cached pipeline instance
@@ -47,63 +47,11 @@ function readWavAsFloat32(audioPath) {
   throw new Error('Không tìm thấy dữ liệu audio trong file WAV');
 }
 
-// Letting Whisper guess the language per 30 s chunk (language: null) makes transformers.js v2
-// loop on one token for the whole file. Detect once instead: decode a single token after
-// <|startoftranscript|> on the first 30 s that contain sound, which is the language token.
-async function detectLanguage(pipe, audio) {
-  const SR = 16000;
-  let start = 0;
-  while (start < audio.length && Math.abs(audio[start]) < 0.02) start++;
-  if (start >= audio.length) start = 0;
-
-  const { input_features } = await pipe.processor(audio.subarray(start, start + 30 * SR));
-  const out = await pipe.model.generate(input_features, {
-    max_new_tokens: 1,
-    forced_decoder_ids: null,
-    return_timestamps: false,
-  });
-  const ids = Array.from(out[0] ?? out, Number);
-  const token = pipe.tokenizer.model.vocab[ids[ids.length - 1]] ?? '';
-  const match = /^<\|([a-z]{2,3})\|>$/.exec(token);
-  return match ? match[1] : null;
-}
-
 // Whisper hallucinates loops on music, moans or noise ("ああああ…", "ねえ、ねえ、ねえ…") that can fill a
 // whole 30 s window. Keep at most 3 copies of any short run; a 400-char loop also makes Ollama abort
 // with "token repeat limit reached", which used to throw away the whole job.
 function collapseRepeats(text) {
   return text.replace(/(.{1,20}?)\1{3,}/gs, '$1$1$1');
-}
-
-// A line much longer than a spoken sentence means Whisper stuck one text (often a hallucinated loop)
-// over a whole stretch of moans, music or noise. Re-transcribe that stretch in short independent
-// windows so each sound gets its own line with its own timing; quiet windows produce no line.
-const MAX_SEGMENT_S = 8;
-const RESPLIT_WINDOW_S = 5;
-
-function rms(samples) {
-  let sum = 0;
-  for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
-  return Math.sqrt(sum / (samples.length || 1));
-}
-
-async function resplitLongSegment(pipe, audio, start, end, lang) {
-  const SR = 16000;
-  const round = (t) => Math.round(t * 100) / 100;
-  const out = [];
-  for (let winStart = start; winStart < end - 0.3; winStart += RESPLIT_WINDOW_S) {
-    const winEnd = Math.min(end, winStart + RESPLIT_WINDOW_S);
-    const slice = audio.subarray(Math.floor(winStart * SR), Math.floor(winEnd * SR));
-    if (rms(slice) < 0.01) continue;
-
-    const r = await pipe(slice, { language: lang, task: 'transcribe', return_timestamps: true });
-    for (const c of r.chunks ?? []) {
-      const s = winStart + (c.timestamp?.[0] ?? 0);
-      const e = Math.min(winEnd, winStart + (c.timestamp?.[1] ?? winEnd - winStart));
-      if (e > s) out.push({ startTime: round(s), endTime: round(e), text: c.text });
-    }
-  }
-  return out;
 }
 
 function makeId() {
@@ -168,15 +116,156 @@ async function transcribeWithAPI(audioPath, apiKey, language, onProgress) {
   }
 }
 
-// ─── Local: @xenova/transformers (Whisper) ────────────────────────────────────
+// ─── Local: @huggingface/transformers v3 (Whisper) ───────────────────────────
+// transformers.js v2 (onnxruntime 1.14) could not load large-v3 models and its timestamps/language
+// handling garbled Japanese (34 % character errors on a clean test dialogue vs 3 % now).
 
-async function transcribeLocal(audioPath, modelSize = 'small', language, onProgress) {
-  try {
-    onProgress?.({
-      status: 'loading',
-      message: `Đang tải model Whisper ${modelSize} (lần đầu sẽ download ~${getModelSize(modelSize)})...`,
-      percent: 5,
+const path = require('path');
+const zlib = require('zlib');
+const vad = require('./vad');
+const { CACHE_DIR, ensureModelFiles, downloadMessage } = require('./models');
+
+const SR = 16000;
+
+// large-v3-turbo: large-v3 encoder with a 4-layer decoder, close to large-v3 accuracy at medium speed
+const MODEL_REPOS = {
+  tiny: 'Xenova/whisper-tiny',
+  base: 'Xenova/whisper-base',
+  small: 'Xenova/whisper-small',
+  medium: 'Xenova/whisper-medium',
+  'large-v3-turbo': 'onnx-community/whisper-large-v3-turbo',
+};
+const WHISPER_FILES = [
+  'config.json', 'generation_config.json', 'preprocessor_config.json', 'tokenizer.json', 'tokenizer_config.json',
+  'onnx/encoder_model_quantized.onnx', 'onnx/decoder_model_merged_quantized.onnx',
+];
+const VAD_REPO = 'onnx-community/silero-vad';
+const VAD_FILE = 'onnx/model.onnx';
+
+const MAX_CHUNK_S = 25;    // Whisper sees 30 s windows; leave room so chunks end in a pause
+const MAX_SEGMENT_S = 8;   // a subtitle line longer than this is re-split at pauses
+
+// v3 silently falls back to English when no language is given, so detect it ourselves:
+// one decoder step after <|startoftranscript|> scores every language token.
+async function detectLanguage(pipe, audio, chunks) {
+  const { Tensor } = await import('@huggingface/transformers');
+  const first = chunks[0] ?? { start: 0, end: 30 };
+  const slice = audio.subarray(Math.floor(first.start * SR), Math.floor((first.start + 29.5) * SR));
+  const { input_features } = await pipe.processor(slice);
+
+  const t2i = pipe.tokenizer.model.tokens_to_ids;
+  const sot = t2i.get('<|startoftranscript|>');
+  const out = await pipe.model({
+    input_features,
+    decoder_input_ids: new Tensor('int64', BigInt64Array.from([BigInt(sot)]), [1, 1]),
+  });
+  const logits = out.logits.data;
+  const offset = logits.length - out.logits.dims.at(-1);
+
+  let best = null;
+  let bestScore = -Infinity;
+  for (const [token, id] of t2i) {
+    const m = /^<\|([a-z]{2,3})\|>$/.exec(token);
+    if (m && logits[offset + id] > bestScore) {
+      bestScore = logits[offset + id];
+      best = m[1];
+    }
+  }
+  return best;
+}
+
+// What Whisper invents for breathing or silence (YouTube outros it was trained on); only dropped in
+// non-speech sounds, where it cannot be what was said
+const NON_SPEECH_HALLUCINATIONS = /ご視聴|ご清聴|チャンネル登録|字幕|視聴者|thanks? (you )?for watching|subscribe|subtitles? by/i;
+
+// Whisper's own hallucination test: looping text compresses far better than real speech
+function looksLikeLoop(text) {
+  const bytes = Buffer.from(text, 'utf8');
+  return bytes.length > 60 && bytes.length / zlib.deflateSync(bytes).length > 2.4;
+}
+
+async function transcribeSpan(pipe, audio, start, end, lang, vocal = false) {
+  const slice = audio.subarray(Math.floor(start * SR), Math.floor(end * SR));
+  const dur = end - start;
+  const opts = {
+    language: lang,
+    task: 'transcribe',
+    return_timestamps: true,
+    // Real speech needs ~10 tokens/s at most; the cap stops a loop from filling the window.
+    // Moans/shouts are a few short words, so they get a much tighter cap.
+    max_new_tokens: vocal ? Math.ceil(dur * 6) + 8 : Math.min(440, Math.ceil(dur * 12) + 24),
+  };
+
+  let r = await pipe(slice, opts);
+  if (looksLikeLoop((r.chunks ?? []).map((c) => c.text).join(''))) {
+    r = await pipe(slice, { ...opts, no_repeat_ngram_size: 4, repetition_penalty: 1.3 });
+  }
+
+  const round = (t) => Math.round(t * 100) / 100;
+  return (r.chunks ?? [])
+    .filter((c) => !(vocal && NON_SPEECH_HALLUCINATIONS.test(c.text)))
+    .map((c) => {
+      const s = Math.min(end, start + (c.timestamp?.[0] ?? 0));
+      let e = Math.min(end, start + (c.timestamp?.[1] ?? dur));
+      if (e <= s) e = Math.min(end, s + 2);
+      return { startTime: round(s), endTime: round(e), text: c.text };
     });
+}
+
+// Whisper often packs two speakers' lines into one segment separated by a space
+// ("助かる 前回は1時間も…"). Japanese and Chinese are written without spaces, so there a space is an
+// utterance break: give each part its own line, cut at the longest pauses the VAD found inside the
+// segment, or by text length when there are fewer pauses than parts.
+function splitUtterances(seg, speech, lang) {
+  if (!['ja', 'zh'].includes(lang)) return [seg];
+  const parts = seg.text.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return [seg];
+
+  const round = (t) => Math.round(t * 100) / 100;
+  const inside = speech
+    .map((r) => ({ start: Math.max(r.start, seg.startTime), end: Math.min(r.end, seg.endTime) }))
+    .filter((r) => r.end - r.start > 0.15);
+
+  if (inside.length >= parts.length) {
+    const cuts = inside
+      .slice(1)
+      .map((r, i) => ({ i: i + 1, gap: r.start - inside[i].end }))
+      .sort((a, b) => b.gap - a.gap)
+      .slice(0, parts.length - 1)
+      .map((c) => c.i)
+      .sort((a, b) => a - b);
+    const bounds = [0, ...cuts, inside.length];
+    return parts.map((text, k) => ({
+      startTime: round(k === 0 ? seg.startTime : inside[bounds[k]].start),
+      endTime: round(k === parts.length - 1 ? seg.endTime : inside[bounds[k + 1] - 1].end),
+      text,
+    }));
+  }
+
+  const totalChars = parts.reduce((n, p) => n + p.length, 0);
+  const dur = seg.endTime - seg.startTime;
+  let t = seg.startTime;
+  return parts.map((text) => {
+    const s = t;
+    t += (dur * text.length) / totalChars;
+    return { startTime: round(s), endTime: round(t), text };
+  });
+}
+
+// includeVocals: also subtitle moans, shouts and breathing that are not speech ("イク", "あっ")
+async function transcribeLocal(audioPath, modelSize = 'small', language, onProgress, { includeVocals = false } = {}) {
+  try {
+    const repo = MODEL_REPOS[modelSize] ?? MODEL_REPOS.small;
+
+    onProgress?.({ status: 'loading', message: `Đang chuẩn bị model Whisper ${modelSize}...`, percent: 3 });
+    await ensureModelFiles(repo, WHISPER_FILES, (file, loaded, total) => {
+      onProgress?.({
+        status: 'downloading',
+        message: downloadMessage(`model ${modelSize}`, file, loaded, total),
+        percent: Math.round(3 + (total ? loaded / total : 0) * 40),
+      });
+    });
+    await ensureModelFiles(VAD_REPO, [VAD_FILE]);
 
     // Rebuild the pipeline when the user picks a different model size
     if (localPipeline && localModelSize !== modelSize) {
@@ -190,76 +279,62 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
     }
 
     if (!localPipeline) {
-      const { pipeline, env } = await import('@xenova/transformers');
-
-      // Cache models in user data folder instead of node_modules
-      env.cacheDir = require('path').join(require('os').homedir(), '.kathsub', 'models');
-      env.allowRemoteModels = true;
-
-      localPipeline = await pipeline(
-        'automatic-speech-recognition',
-        `Xenova/whisper-${modelSize}`,
-        {
-          progress_callback: (p) => {
-            if (p.status === 'downloading') {
-              const pct = Math.round((p.loaded / p.total) * 100) || 0;
-              onProgress?.({
-                status: 'downloading',
-                message: `Đang tải model: ${p.file} (${pct}%)`,
-                percent: Math.round(5 + pct * 0.5),
-              });
-            }
-          },
-        }
-      );
+      onProgress?.({ status: 'loading', message: `Đang nạp model Whisper ${modelSize}...`, percent: 45 });
+      const { pipeline, env } = await import('@huggingface/transformers');
+      env.cacheDir = CACHE_DIR;
+      env.allowRemoteModels = true; // small optional files not in WHISPER_FILES
+      localPipeline = await pipeline('automatic-speech-recognition', repo, {
+        dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' },
+      });
       localModelSize = modelSize;
     }
 
-    onProgress?.({ status: 'transcribing', message: 'Đang nhận dạng giọng nói...', percent: 60 });
-
     const audio = readWavAsFloat32(audioPath);
+
+    onProgress?.({ status: 'vad', message: 'Đang tìm các đoạn có giọng nói...', percent: 50 });
+    const probs = await vad.speechProbs(audio, path.join(CACHE_DIR, VAD_REPO, VAD_FILE), (f) =>
+      onProgress?.({ status: 'vad', message: `Đang tìm các đoạn có giọng nói... ${Math.round(f * 100)}%`, percent: Math.round(50 + f * 6) }),
+    );
+    const speech = vad.speechRegions(probs);
+    const chunks = vad.groupChunks(speech, probs, MAX_CHUNK_S);
+    if (includeVocals) {
+      for (const c of vad.groupChunks(vad.loudRegions(audio, speech), probs, 4)) chunks.push({ ...c, vocal: true });
+      chunks.sort((a, b) => a.start - b.start);
+    }
+    if (!chunks.length) {
+      // Speech under loud music can fool the VAD; better to transcribe everything than nothing
+      const total = audio.length / SR;
+      for (let t = 0; t < total; t += MAX_CHUNK_S) chunks.push({ start: t, end: Math.min(total, t + MAX_CHUNK_S) });
+    }
 
     let lang = language && language !== 'auto' ? language : null;
     if (!lang) {
       onProgress?.({ status: 'detecting', message: 'Đang nhận biết ngôn ngữ...', percent: 58 });
-      lang = await detectLanguage(localPipeline, audio);
+      lang = await detectLanguage(localPipeline, audio, chunks.filter((c) => !c.vocal));
     }
 
-    // transformers.js advances each 30 s window by 30 - 2 * 5 = 20 s
-    const totalChunks = Math.max(1, Math.ceil(audio.length / (16000 * 20)));
-    let doneChunks = 0;
-
-    // Chunking options belong to the call, not pipeline(); without them only the first 30 s is transcribed
-    const result = await localPipeline(audio, {
-      language: lang,
-      return_timestamps: true,
-      task: 'transcribe',
-      chunk_length_s: 30,
-      stride_length_s: 5,
-      chunk_callback: () => {
-        doneChunks = Math.min(doneChunks + 1, totalChunks);
-        onProgress?.({
-          status: 'transcribing',
-          message: `Đang nhận dạng giọng nói... ${Math.round((doneChunks / totalChunks) * 100)}%`,
-          percent: Math.round(60 + (doneChunks / totalChunks) * 34),
-        });
-      },
-    });
-
-    onProgress?.({ status: 'processing', message: 'Đang xử lý kết quả...', percent: 95 });
-
     const segments = [];
-    for (const c of result.chunks ?? []) {
-      const startTime = c.timestamp?.[0] ?? 0;
-      const endTime   = c.timestamp?.[1] ?? startTime + 3;
-      if (endTime - startTime > MAX_SEGMENT_S) {
-        segments.push(...(await resplitLongSegment(localPipeline, audio, startTime, endTime, lang)));
-      } else {
-        segments.push({ startTime, endTime, text: c.text });
+    for (let i = 0; i < chunks.length; i++) {
+      onProgress?.({
+        status: 'transcribing',
+        message: `Đang nhận dạng giọng nói... ${Math.round((i / chunks.length) * 100)}%`,
+        percent: Math.round(60 + (i / chunks.length) * 34),
+      });
+      const { start, end, vocal } = chunks[i];
+      for (const seg of await transcribeSpan(localPipeline, audio, start, end, lang, vocal)) {
+        if (seg.endTime - seg.startTime <= MAX_SEGMENT_S) {
+          segments.push(seg);
+          continue;
+        }
+        // One text stuck over a long stretch (often moans or music): redo it in short pieces cut at pauses
+        for (const piece of vad.groupChunks([{ start: seg.startTime, end: seg.endTime }], probs, 6)) {
+          segments.push(...(await transcribeSpan(localPipeline, audio, piece.start, piece.end, lang)));
+        }
       }
     }
 
-    const subtitles = buildSubtitles(segments);
+    onProgress?.({ status: 'processing', message: 'Đang xử lý kết quả...', percent: 95 });
+    const subtitles = buildSubtitles(segments.flatMap((seg) => splitUtterances(seg, speech, lang)));
     onProgress?.({ status: 'done', message: 'Hoàn thành!', percent: 100 });
     return { success: true, subtitles, language: lang };
   } catch (err) {
@@ -268,11 +343,6 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
     localModelSize = null;
     return { success: false, error: err.message };
   }
-}
-
-function getModelSize(modelSize) {
-  const sizes = { tiny: '75 MB', base: '145 MB', small: '466 MB', medium: '1.5 GB' };
-  return sizes[modelSize] ?? '???';
 }
 
 module.exports = { transcribeWithAPI, transcribeLocal };

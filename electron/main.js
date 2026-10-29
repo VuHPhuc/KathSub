@@ -323,10 +323,10 @@ ipcMain.handle('transcribe-api', async (event, { audioPath, apiKey, language }) 
   }
 });
 
-ipcMain.handle('transcribe-local', async (event, { audioPath, modelSize, language }) => {
+ipcMain.handle('transcribe-local', async (event, { audioPath, modelSize, language, includeVocals }) => {
   if (!whisperService) return { success: false, error: 'Whisper service not available' };
   try {
-    return await whisperService.transcribeLocal(audioPath, modelSize, language, (p) => sendTranscribeProgress(event, p));
+    return await whisperService.transcribeLocal(audioPath, modelSize, language, (p) => sendTranscribeProgress(event, p), { includeVocals });
   } finally {
     removeTempAudio(audioPath);
   }

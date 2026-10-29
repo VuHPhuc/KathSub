@@ -4,7 +4,7 @@ import { t } from '../../locales';
 import OllamaSetup from './OllamaSetup';
 import { loadPref, savePref } from '../../utils/prefs';
 
-const MODELS = ['tiny', 'base', 'small', 'medium'];
+const MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo'];
 const SOURCE_LANGS = [
   { code: 'auto', labelKey: 'langAuto' },
   { code: 'ja',   labelKey: 'langJa' },
@@ -27,8 +27,8 @@ export default function AutoTranscribe({ addToast }) {
 
   // Last choices are remembered across restarts (the API key is not stored)
   const [saved] = useState(() => loadPref('transcribeOptions', {
-    transcribeMode: 'local', modelSize: 'small', subLang: 'auto', targetLang: 'none',
-    engine: 'nllb', outputMode: 'translated', ollamaModel: '',
+    transcribeMode: 'local', modelSize: 'large-v3-turbo', subLang: 'auto', targetLang: 'none',
+    engine: 'nllb', outputMode: 'translated', ollamaModel: '', includeVocals: false, review: true,
   }));
   const [transcribeMode, setTranscribeMode] = useState(saved.transcribeMode); // 'cloud' | 'local'
   const [apiKey,     setApiKey]     = useState('');
@@ -39,6 +39,8 @@ export default function AutoTranscribe({ addToast }) {
   const [outputMode, setOutputMode] = useState(saved.outputMode); // 'translated' | 'bilingual'
   const [ollama,     setOllama]     = useState(null); // { installed, running, models } once checked
   const [ollamaModel, setOllamaModel] = useState(saved.ollamaModel);
+  const [includeVocals, setIncludeVocals] = useState(saved.includeVocals);
+  const [review,     setReview]     = useState(saved.review);
   const [setupBusy,  setSetupBusy]  = useState(false); // Ollama install / start / pull in progress
   const [step,       setStep]       = useState('');
   const [progress,   setProgress]   = useState({ message: '', percent: 0 });
@@ -69,8 +71,8 @@ export default function AutoTranscribe({ addToast }) {
   }, []);
 
   useEffect(() => {
-    savePref('transcribeOptions', { transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel });
-  }, [transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel]);
+    savePref('transcribeOptions', { transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review });
+  }, [transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review]);
 
   const handleStart = async () => {
     if (!videoPath) return;
@@ -90,7 +92,7 @@ export default function AutoTranscribe({ addToast }) {
 
       let result = transcribeMode === 'cloud'
         ? await window.electron.transcribeApi({ audioPath: audioResult.audioPath, apiKey: apiKey.trim(), language: subLang })
-        : await window.electron.transcribeLocal({ audioPath: audioResult.audioPath, modelSize, language: subLang });
+        : await window.electron.transcribeLocal({ audioPath: audioResult.audioPath, modelSize, language: subLang, includeVocals });
       if (!result.success) throw new Error(result.error);
       if (!result.subtitles.length) throw new Error(t('noSpeech', uiLang));
 
@@ -108,6 +110,7 @@ export default function AutoTranscribe({ addToast }) {
           engine,
           ollamaModel,
           outputMode,
+          review,
         });
         // A failed translation must not throw away a finished transcription
         if (translated.success) subtitles = translated.subtitles;
@@ -214,6 +217,22 @@ export default function AutoTranscribe({ addToast }) {
             </label>
           </div>
 
+          {transcribeMode === 'local' && (
+            <div className="switch-row at-switch">
+              <span className="at-label">{t('includeVocals', uiLang)}</span>
+              <label className="studio-switch">
+                <input
+                  type="checkbox"
+                  id="toggle-vocals"
+                  checked={includeVocals}
+                  onChange={(e) => setIncludeVocals(e.target.checked)}
+                  disabled={running}
+                />
+                <span className="switch-slider" />
+              </label>
+            </div>
+          )}
+
           <div className="at-hint">
             {transcribeMode === 'local' ? t('localNote', uiLang) : t('cloudNote', uiLang)}
           </div>
@@ -288,6 +307,22 @@ export default function AutoTranscribe({ addToast }) {
                   : t('ollamaNote', uiLang)}
                 {engine === 'nllb' && !ollamaReady && <> {t('ollamaHint', uiLang)}</>}
               </div>
+
+              {engine === 'ollama' && (
+                <div className="switch-row at-switch">
+                  <span className="at-label">{t('reviewTranslation', uiLang)}</span>
+                  <label className="studio-switch">
+                    <input
+                      type="checkbox"
+                      id="toggle-review"
+                      checked={review}
+                      onChange={(e) => setReview(e.target.checked)}
+                      disabled={running}
+                    />
+                    <span className="switch-slider" />
+                  </label>
+                </div>
+              )}
 
               {engine === 'ollama' && (
                 <OllamaSetup
