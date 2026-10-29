@@ -21,7 +21,7 @@ Bạn có thể tải các bản phát hành chính thức trực tiếp tại m
 | Tên tệp | Loại | Mô tả |
 | :--- | :---: | :--- |
 | [**KathSub Setup 1.0.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bộ cài đặt (Installer)** | Tự động cài đặt vào máy, tạo biểu tượng ngoài màn hình Desktop và menu Start. Khuyên dùng cho người dùng phổ thông. |
-| [**KathSub 1.0.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bản Portable (Chạy ngay)** | Chỉ cần nhấp đúp là mở phần mềm ngay, không cần cài đặt, có thể chép vào USB mang đi mọi nơi. |
+| [**KathSub Portable 1.0.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bản Portable (Chạy ngay)** | Chỉ cần nhấp đúp là mở phần mềm ngay, không cần cài đặt, có thể chép vào USB mang đi mọi nơi. |
 
 > **Lưu ý trên máy tính cục bộ:** Các file `.exe` cài đặt cũng đã được đóng gói sẵn trong thư mục cục bộ tại:  
 > `d:\code\KathSub\release\`
@@ -84,7 +84,7 @@ npm run dist
 ```
 Các file cài đặt đầu ra sẽ được tạo tại thư mục `release/`:
 - `release/KathSub Setup 1.0.0.exe`
-- `release/KathSub 1.0.0.exe`
+- `release/KathSub Portable 1.0.0.exe`
 
 ---
 
@@ -104,3 +104,4 @@ Các file cài đặt đầu ra sẽ được tạo tại thư mục `release/`:
 
 Phát triển bởi **Vũ Phúc** ([@VuHPhuc](https://github.com/VuHPhuc)).  
 Mã nguồn phát hành dưới giấy phép mã nguồn mở [MIT License](LICENSE).
+

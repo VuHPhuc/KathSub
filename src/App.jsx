@@ -111,7 +111,7 @@ function TitleBar() {
   return (
     <div className="titlebar">
       <div className="titlebar-logo">
-        <IconFilm size={15} color="#3b82f6" />
+        <img src="./icon.png" alt="KathSub Logo" className="titlebar-app-icon" />
         <span className="logo-text">{t('appName', language)}</span>
         <span className="logo-tagline">
           — {t('tagline', language)}

@@ -105,6 +105,16 @@ html, body, #root {
   letter-spacing: 0.02em;
   color: var(--text-primary);
 }
+.titlebar-app-icon {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  object-fit: cover;
+  box-shadow: 0 0 8px rgba(249, 115, 22, 0.4);
+  flex-shrink: 0;
+  user-select: none;
+  -webkit-user-drag: none;
+}
 .titlebar-logo span.logo-text {
   font-weight: 700;
   color: var(--text-primary);
