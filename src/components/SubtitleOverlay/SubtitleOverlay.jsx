@@ -1,5 +1,5 @@
 import React, { useCallback, useRef } from 'react';
-import useStore from '../../store/subtitleStore';
+import useStore, { DEFAULT_BOX_WIDTH, BOX_WIDTH_MIN, BOX_WIDTH_MAX } from '../../store/subtitleStore';
 
 /**
  * Renders active subtitles AND active icon/sticker overlays over the video.
@@ -28,6 +28,7 @@ export default function SubtitleOverlay({ videoDims }) {
           isSelected={sub.id === selectedId && selectedTrackType === 'subtitle'}
           onSelect={() => selectSubtitle(sub.id)}
           onMove={(x, y) => updateSubtitle(sub.id, { x, y })}
+          onResize={(boxWidth) => updateSubtitle(sub.id, { boxWidth })}
         />
       ))}
 
@@ -50,11 +51,12 @@ export default function SubtitleOverlay({ videoDims }) {
 
 // ─── Draggable Subtitle Box ──────────────────────────────────────────────────
 
-function DraggableSubtitle({ sub, videoDims, isSelected, onSelect, onMove }) {
+function DraggableSubtitle({ sub, videoDims, isSelected, onSelect, onMove, onResize }) {
   const dragRef = useRef(null);
   const startRef = useRef(null);
 
   const { x, y, text, fontSize, fontFamily, color, backgroundColor, bold, italic, outlineColor, outlineWidth, hasBox } = sub;
+  const boxWidth = sub.boxWidth ?? DEFAULT_BOX_WIDTH;
 
   // Position in px
   const pxX = videoDims.x + (x / 100) * videoDims.w;
@@ -87,6 +89,30 @@ function DraggableSubtitle({ sub, videoDims, isSelected, onSelect, onMove }) {
     window.addEventListener('mouseup', onMouseUp);
   }, [x, y, videoDims, onMove, onSelect]);
 
+  // Side handles widen / narrow the wrap width; the box stays centred on x, so each side moves by dx.
+  // Starts from the width on screen: a short line is narrower than its limit, and dragging inwards should bite at once.
+  const handleResizeDown = useCallback((e, side) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const shown = (dragRef.current?.getBoundingClientRect().width / videoDims.w) * 100;
+    const origWidth = Math.min(boxWidth, shown || boxWidth);
+    const mouseX = e.clientX;
+
+    const onMouseMove = (ev) => {
+      const dx = (ev.clientX - mouseX) * (side === 'left' ? -1 : 1);
+      const next = Math.max(BOX_WIDTH_MIN, Math.min(BOX_WIDTH_MAX, origWidth + ((2 * dx) / videoDims.w) * 100));
+      onResize(Math.round(next));
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }, [boxWidth, videoDims, onResize]);
+
   const oColor = outlineColor || '#000000';
   const textShadowOutline = `-2px -2px 0 ${oColor}, 2px -2px 0 ${oColor}, -2px 2px 0 ${oColor}, 2px 2px 0 ${oColor}, -1px 0 0 ${oColor}, 1px 0 0 ${oColor}, 0 -1px 0 ${oColor}, 0 1px 0 ${oColor}, 0 2px 5px rgba(0,0,0,0.85)`;
 
@@ -106,13 +132,28 @@ function DraggableSubtitle({ sub, videoDims, isSelected, onSelect, onMove }) {
     <div
       ref={dragRef}
       className={`subtitle-box${isSelected ? ' selected' : ''}`}
-      style={{ left: pxX, top: pxY }}
+      // max-content + max-width: an absolute box centred on x would otherwise wrap at the space right of x (half the video)
+      style={{ left: pxX, top: pxY, maxWidth: (boxWidth / 100) * videoDims.w }}
       onMouseDown={handleMouseDown}
       id={`overlay-sub-${sub.id}`}
     >
       <span className="subtitle-text" style={textStyle}>
         {text || ''}
       </span>
+      {isSelected && (
+        <>
+          <div
+            className="subtitle-resize-handle left"
+            onMouseDown={(e) => handleResizeDown(e, 'left')}
+            title={`Kéo để đổi độ rộng khung phụ đề (${boxWidth}%)`}
+          />
+          <div
+            className="subtitle-resize-handle right"
+            onMouseDown={(e) => handleResizeDown(e, 'right')}
+            title={`Kéo để đổi độ rộng khung phụ đề (${boxWidth}%)`}
+          />
+        </>
+      )}
     </div>
   );
 }

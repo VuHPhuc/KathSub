@@ -4,8 +4,13 @@ import { loadPref, savePref } from '../utils/prefs';
 // Style fields a subtitle carries; the last style the user set is remembered for new subtitles
 export const STYLE_KEYS = [
   'x', 'y', 'fontSize', 'fontFamily', 'color', 'hasBox', 'backgroundColor',
-  'bold', 'italic', 'outlineColor', 'outlineWidth',
+  'bold', 'italic', 'outlineColor', 'outlineWidth', 'boxWidth',
 ];
+
+// Widest a line may run before it wraps, in % of the video width (preview and burned-in export)
+export const DEFAULT_BOX_WIDTH = 80;
+export const BOX_WIDTH_MIN = 50;
+export const BOX_WIDTH_MAX = 95;
 
 const DEFAULT_SUBTITLE_STYLE = {
   x: 50,
@@ -19,7 +24,21 @@ const DEFAULT_SUBTITLE_STYLE = {
   italic: false,
   outlineColor: '#000000',
   outlineWidth: 2,
+  boxWidth: DEFAULT_BOX_WIDTH,
 };
+
+// Transcribed or imported lines can run into the next one; the subtitle track has one row, so a line that does is
+// cut at the next line's start. A line that would be left shorter than 0.2 s is kept as it is.
+function trimOverlaps(list) {
+  const sorted = [...list].sort((a, b) => a.startTime - b.startTime);
+  return sorted.map((sub, i) => {
+    const next = sorted[i + 1];
+    if (next && sub.endTime > next.startTime && next.startTime - sub.startTime >= 0.2) {
+      return { ...sub, endTime: next.startTime };
+    }
+    return sub;
+  });
+}
 
 function pickStyle(sub) {
   const style = {};
@@ -87,8 +106,14 @@ const useStore = create((set, get) => ({
     const { subtitles, selectedId, selectedTrackType, subtitleStyle } = get();
     const id = `sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const dur = duration || 300;
-    const start = Math.max(0, Math.round(currentTime * 100) / 100);
-    const end = Math.min(dur, Math.round((start + 2.5) * 100) / 100);
+    // Never on top of another line: inside one, the new line starts where it ends; it stops at the next one
+    let start = Math.max(0, Math.round(currentTime * 100) / 100);
+    for (let covering; (covering = subtitles.find((s) => start >= s.startTime && start < s.endTime));) {
+      start = covering.endTime; // lines back to back: keep going to the first gap
+    }
+    const next = subtitles.find((s) => s.startTime >= start);
+    const limit = next && next.startTime - start >= 0.3 ? next.startTime : dur;
+    const end = Math.min(dur, limit, Math.round((start + 2.5) * 100) / 100);
 
     // Kế thừa style & vị trí từ sub trước đó hoặc sub đang chọn
     let sourceSub = null;
@@ -107,7 +132,7 @@ const useStore = create((set, get) => ({
     const sub = {
       id,
       startTime: start,
-      endTime: Math.max(start + 0.5, end),
+      endTime: end - start >= 0.3 ? end : start + 0.5, // no room before the next line: the old 0.5 s minimum
       text: 'Phụ đề mới...',
       // No subtitle to inherit from (new video) → the style the user last set
       ...subtitleStyle,
@@ -143,6 +168,7 @@ const useStore = create((set, get) => ({
       italic: prevSub.italic,
       outlineColor: prevSub.outlineColor,
       outlineWidth: prevSub.outlineWidth,
+      boxWidth: prevSub.boxWidth ?? DEFAULT_BOX_WIDTH,
     };
     set((s) => ({
       subtitles: s.subtitles.map((sub) => (sub.id === targetId ? { ...sub, ...stylePatch } : sub)),
@@ -167,6 +193,7 @@ const useStore = create((set, get) => ({
       italic: sourceSub.italic,
       outlineColor: sourceSub.outlineColor,
       outlineWidth: sourceSub.outlineWidth,
+      boxWidth: sourceSub.boxWidth ?? DEFAULT_BOX_WIDTH,
     };
 
     set((s) => ({
@@ -191,17 +218,20 @@ const useStore = create((set, get) => ({
       selectedId: s.selectedId === id ? null : s.selectedId,
     })),
 
-  // Replace only the text of the given subtitles (Map id → text); timing and style stay as they are
-  setSubtitleTexts: (textsById) =>
+  // Merge fields into the given subtitles (Map id → patch, e.g. a translation's text + sourceText); timing and style stay
+  patchSubtitles: (patchesById) =>
     set((s) => ({
-      subtitles: s.subtitles.map((sub) => (textsById.has(sub.id) ? { ...sub, text: textsById.get(sub.id) } : sub)),
+      subtitles: s.subtitles.map((sub) => (patchesById.has(sub.id) ? { ...sub, ...patchesById.get(sub.id) } : sub)),
     })),
 
   setSubtitles: (list) =>
     set({
-      subtitles: list.sort((a, b) => a.startTime - b.startTime),
+      subtitles: trimOverlaps(list),
       selectedId: null,
     }),
+
+  // Collapse the selected card (second click on it): nothing selected, the video stays where it is
+  deselectSubtitle: () => set({ selectedId: null }),
 
   selectSubtitle: (id) => {
     const sub = get().subtitles.find((s) => s.id === id);

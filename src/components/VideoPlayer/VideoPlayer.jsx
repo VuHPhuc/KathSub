@@ -233,24 +233,27 @@ export default function VideoPlayer({ addToast }) {
   }, []);
 
   return (
-    <div className="video-player-wrapper" ref={wrapperRef}>
-      <video
-        ref={videoRef}
-        src={videoUrl || undefined}
-        className="video-element"
-        onTimeUpdate={handleTimeUpdate}
-        onLoadedMetadata={handleLoadedMetadata}
-        onCanPlay={handleCanPlay}
-        onError={handleError}
-        onPlay={handlePlay}
-        onPause={handlePause}
-        onEnded={handleEnded}
-        id="main-video"
-        onClick={togglePlay}
-      />
+    // Controls sit under the picture, not over it: a subtitle can be dragged all the way to the bottom edge
+    <div className="video-player">
+      <div className="video-player-wrapper" ref={wrapperRef}>
+        <video
+          ref={videoRef}
+          src={videoUrl || undefined}
+          className="video-element"
+          onTimeUpdate={handleTimeUpdate}
+          onLoadedMetadata={handleLoadedMetadata}
+          onCanPlay={handleCanPlay}
+          onError={handleError}
+          onPlay={handlePlay}
+          onPause={handlePause}
+          onEnded={handleEnded}
+          id="main-video"
+          onClick={togglePlay}
+        />
 
-      {/* Subtitle overlay */}
-      <SubtitleOverlay videoDims={videoDims} />
+        {/* Subtitle overlay */}
+        <SubtitleOverlay videoDims={videoDims} />
+      </div>
 
       {/* Controls */}
       <div className="video-controls">

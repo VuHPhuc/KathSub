@@ -138,16 +138,25 @@ const MODEL_REPOS = {
   small: 'Xenova/whisper-small',
   medium: 'Xenova/whisper-medium',
   'large-v3-turbo': 'onnx-community/whisper-large-v3-turbo',
+  // large-v3-turbo fine-tuned on Japanese anime / visual-novel voices (efwkjn/whisper-ja-anime-v0.3): far fewer
+  // misheard words in moaned or shouted lines. Japanese only, with its own smaller Japanese vocabulary.
+  'anime-ja': 'willopcbeta/whisper-ja-anime-v0.3-ONNX',
 };
-const WHISPER_FILES = [
+// Per-model differences: anime-ja ships no 8-bit encoder (4-bit instead) and only knows Japanese
+const MODEL_OPTIONS = {
+  'anime-ja': { encoder: 'q4', language: 'ja' },
+};
+const DTYPE_SUFFIX = { q8: 'quantized', q4: 'q4' };
+const whisperFiles = (size) => [
   'config.json', 'generation_config.json', 'preprocessor_config.json', 'tokenizer.json', 'tokenizer_config.json',
-  'onnx/encoder_model_quantized.onnx', 'onnx/decoder_model_merged_quantized.onnx',
+  `onnx/encoder_model_${DTYPE_SUFFIX[MODEL_OPTIONS[size]?.encoder ?? 'q8']}.onnx`, 'onnx/decoder_model_merged_quantized.onnx',
 ];
 const VAD_REPO = 'onnx-community/silero-vad';
 const VAD_FILE = 'onnx/model.onnx';
 
 const MAX_CHUNK_S = 25;    // Whisper sees 30 s windows; leave room so chunks end in a pause
 const MAX_SEGMENT_S = 8;   // a subtitle line longer than this is re-split at pauses
+const SPLIT_S = 6;         // a looping chunk longer than this is redone per speech region (pieces up to this long)
 
 // v3 silently falls back to English when no language is given, so detect it ourselves:
 // one decoder step after <|startoftranscript|> scores every language token. The 3 longest speech
@@ -195,7 +204,11 @@ function looksLikeLoop(text) {
   return bytes.length > 60 && bytes.length / zlib.deflateSync(bytes).length > 2.4;
 }
 
-async function transcribeSpan(pipe, audio, start, end, lang, vocal = false) {
+// split: on a loop, do not retry; return { kept, loopFrom } instead — the lines before the loop (their timestamps are
+// fine) and where the loop starts — so the caller can redo the rest per speech region. The retry with
+// repetition_penalty also penalises the timestamp tokens: every line came back exactly 2.00 s long, end to end
+// (24.82-26.82, 26.82-28.82, ...), so lines sat over pauses and real speech looked like an empty gap.
+async function transcribeSpan(pipe, audio, start, end, lang, vocal = false, { split = false } = {}) {
   const slice = audio.subarray(Math.floor(start * SR), Math.floor(end * SR));
   const dur = end - start;
   const opts = {
@@ -207,20 +220,39 @@ async function transcribeSpan(pipe, audio, start, end, lang, vocal = false) {
     max_new_tokens: vocal ? Math.ceil(dur * 6) + 8 : Math.min(440, Math.ceil(dur * 12) + 24),
   };
 
+  const round = (t) => Math.round(t * 100) / 100;
   let r = await pipe(slice, opts);
   if (looksLikeLoop((r.chunks ?? []).map((c) => c.text).join(''))) {
+    if (split) {
+      // The loop starts at the first line that loops by itself or never ended (it ran into max_new_tokens);
+      // without one (a loop spread over many short lines) the whole span is redone
+      const chunks = r.chunks ?? [];
+      let k = chunks.findIndex((c) => looksLikeLoop(c.text) || c.timestamp?.[1] == null);
+      if (k < 0) k = 0;
+      return {
+        kept: toSegments(chunks.slice(0, k)),
+        loopFrom: Math.min(end, start + (chunks[k]?.timestamp?.[0] ?? 0)),
+      };
+    }
     r = await pipe(slice, { ...opts, no_repeat_ngram_size: 4, repetition_penalty: 1.3 });
+    // Its timestamps are not to be trusted (see above): the span is short here, so it becomes one line
+    const text = (r.chunks ?? []).map((c) => c.text).join('').trim();
+    if (!text || (vocal && (NON_SPEECH_HALLUCINATIONS.test(text) || isTagOnly(text)))) return [];
+    return [{ startTime: round(start), endTime: round(end), text }];
   }
 
-  const round = (t) => Math.round(t * 100) / 100;
-  return (r.chunks ?? [])
-    .filter((c) => !(vocal && (NON_SPEECH_HALLUCINATIONS.test(c.text) || isTagOnly(c.text))))
-    .map((c) => {
-      const s = Math.min(end, start + (c.timestamp?.[0] ?? 0));
-      let e = Math.min(end, start + (c.timestamp?.[1] ?? dur));
-      if (e <= s) e = Math.min(end, s + 2);
-      return { startTime: round(s), endTime: round(e), text: c.text };
-    });
+  return toSegments(r.chunks ?? []);
+
+  function toSegments(list) {
+    return list
+      .filter((c) => !(vocal && (NON_SPEECH_HALLUCINATIONS.test(c.text) || isTagOnly(c.text))))
+      .map((c) => {
+        const s = Math.min(end, start + (c.timestamp?.[0] ?? 0));
+        let e = Math.min(end, start + (c.timestamp?.[1] ?? dur));
+        if (e <= s) e = Math.min(end, s + 2);
+        return { startTime: round(s), endTime: round(e), text: c.text };
+      });
+  }
 }
 
 // Whisper often packs two speakers' lines into one segment separated by a space
@@ -272,7 +304,7 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
     const repo = MODEL_REPOS[modelSize] ?? MODEL_REPOS.small;
 
     onProgress?.({ status: 'loading', message: `Đang chuẩn bị model Whisper ${modelSize}...`, percent: 3 });
-    await ensureModelFiles(repo, WHISPER_FILES, (file, loaded, total) => {
+    await ensureModelFiles(repo, whisperFiles(modelSize), (file, loaded, total) => {
       onProgress?.({
         status: 'downloading',
         message: downloadMessage(`model ${modelSize}`, file, loaded, total),
@@ -297,9 +329,9 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
       onProgress?.({ status: 'loading', message: `Đang nạp model Whisper ${modelSize}...`, percent: 45 });
       const { pipeline, env } = await import('@huggingface/transformers');
       env.cacheDir = CACHE_DIR;
-      env.allowRemoteModels = true; // small optional files not in WHISPER_FILES
+      env.allowRemoteModels = true; // small optional files not in whisperFiles()
       localPipeline = await pipeline('automatic-speech-recognition', repo, {
-        dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' },
+        dtype: { encoder_model: MODEL_OPTIONS[modelSize]?.encoder ?? 'q8', decoder_model_merged: 'q8' },
       });
       localModelSize = modelSize;
     }
@@ -325,7 +357,8 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
       for (let t = 0; t < total; t += MAX_CHUNK_S) chunks.push({ start: t, end: Math.min(total, t + MAX_CHUNK_S) });
     }
 
-    let lang = language && language !== 'auto' ? language : null;
+    // A single-language model transcribes only its own language
+    let lang = MODEL_OPTIONS[modelSize]?.language ?? (language && language !== 'auto' ? language : null);
     if (!lang) {
       onProgress?.({ status: 'detecting', message: 'Đang nhận biết ngôn ngữ...', percent: 58 });
       lang = await detectLanguage(localPipeline, audio, chunks.filter((c) => !c.vocal));
@@ -340,7 +373,22 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
         percent: Math.round(60 + (i / chunks.length) * 34),
       });
       const { start, end, vocal } = chunks[i];
-      for (const seg of await transcribeSpan(localPipeline, audio, start, end, lang, vocal)) {
+      let found = await transcribeSpan(localPipeline, audio, start, end, lang, vocal, { split: !vocal && end - start > SPLIT_S });
+      if (!Array.isArray(found)) {
+        // Looped on a long chunk (moaning between lines): the lines before the loop stay, the rest is redone per
+        // speech region, timed by the VAD
+        const { kept, loopFrom } = found;
+        found = [...kept];
+        const from = kept.length ? Math.max(loopFrom, kept[kept.length - 1].endTime) : start;
+        const inside = speech
+          .map((r) => ({ start: Math.max(r.start, from), end: Math.min(r.end, end) }))
+          .filter((r) => r.end - r.start > 0.1);
+        for (const piece of vad.groupChunks(inside, probs, SPLIT_S, 0.3)) {
+          check();
+          found.push(...(await transcribeSpan(localPipeline, audio, piece.start, piece.end, lang)));
+        }
+      }
+      for (const seg of found) {
         if (seg.endTime - seg.startTime <= MAX_SEGMENT_S) {
           segments.push(seg);
           continue;

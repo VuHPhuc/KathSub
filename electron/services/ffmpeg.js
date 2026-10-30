@@ -184,7 +184,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     const textFormatted = (sub.text || '').replace(/\r?\n/g, '\\N');
 
-    return `Dialogue: 0,${start},${end},${styleName},,0,0,0,,${tags}${textFormatted}`;
+    // libass wraps at PlayResX minus the side margins, even with \pos: the editor's box width becomes the margins
+    const boxWidth = Math.max(30, Math.min(100, sub.boxWidth ?? 80));
+    const marginLR = Math.round((resX * (100 - boxWidth)) / 200);
+
+    return `Dialogue: 0,${start},${end},${styleName},,${marginLR},${marginLR},0,,${tags}${textFormatted}`;
   });
 
   return header + events.join('\n') + '\n';

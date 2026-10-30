@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import useStore from '../../store/subtitleStore';
+import useStore, { DEFAULT_BOX_WIDTH, BOX_WIDTH_MIN, BOX_WIDTH_MAX } from '../../store/subtitleStore';
 import { t } from '../../locales';
 import {
   IconSubtitles,
@@ -63,7 +63,7 @@ export default function SubtitlePanel({ addToast }) {
   const {
     subtitles, selectedId, language, mode,
     videoDuration, currentTime,
-    selectSubtitle, updateSubtitle, deleteSubtitle,
+    selectSubtitle, deselectSubtitle, updateSubtitle, deleteSubtitle,
     addSubtitleAtTime,
     copyStyleFromPreviousSubtitle, applyStyleToAllSubtitles,
     overlays, selectedOverlayId, selectOverlay, updateOverlay, deleteOverlay,
@@ -154,6 +154,7 @@ export default function SubtitlePanel({ addToast }) {
                   isSelected={sub.id === selectedId && selectedTrackType === 'subtitle'}
                   language={language}
                   onSelect={() => selectSubtitle(sub.id)}
+                  onDeselect={deselectSubtitle}
                   onUpdate={(patch) => updateSubtitle(sub.id, patch)}
                   onDelete={() => deleteSubtitle(sub.id)}
                   onCopyPrev={() => handleCopyFromPrev(sub.id)}
@@ -314,9 +315,12 @@ function toHexColor(colorStr, defaultHex = '#000000') {
 
 // ─── Single Subtitle Item Component (Studio 7 Sections) ──────────────────────
 
-function SubtitleItem({ sub, index, isSelected, language, onSelect, onUpdate, onDelete, onCopyPrev, onApplyAll }) {
+function SubtitleItem({ sub, index, isSelected, language, onSelect, onDeselect, onUpdate, onDelete, onCopyPrev, onApplyAll }) {
   const textRef = useRef(null);
   const { setCurrentTime } = useStore();
+
+  const source = sub.sourceText?.trim();
+  const showSource = !!source && sub.text !== sub.sourceText && !sub.text?.startsWith(`${sub.sourceText}\n`);
 
   const handleTimeBlur = (field, value) => {
     const parsed = parseHMS(value);
@@ -379,8 +383,9 @@ function SubtitleItem({ sub, index, isSelected, language, onSelect, onUpdate, on
     <div
       className={`studio-sub-card ${isSelected ? 'selected' : ''}`}
       id={`sub-item-${sub.id}`}
+      // A second click on the open card collapses it (the text box, inspector and timecodes stop the click)
       onClick={() => {
-        onSelect();
+        if (isSelected) return onDeselect();
         handleSeekToSub();
       }}
     >
@@ -388,7 +393,10 @@ function SubtitleItem({ sub, index, isSelected, language, onSelect, onUpdate, on
       <div className="sub-card-header">
         <span
           className="sub-index-badge"
-          onClick={handleSeekToSub}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleSeekToSub();
+          }}
           title="Click để tua đến thời điểm này"
         >
           #{String(index + 1).padStart(2, '0')}
@@ -423,6 +431,14 @@ function SubtitleItem({ sub, index, isSelected, language, onSelect, onUpdate, on
           <IconTrash size={13} />
         </button>
       </div>
+
+      {/* ── CÂU GỐC (CHƯA DỊCH) — chỉ đọc; bilingual already shows it in the text ── */}
+      {showSource && (
+        <div className="sub-source-text" title="Câu gốc trước khi dịch" onClick={(e) => e.stopPropagation()}>
+          <span className="sub-source-label">Gốc</span>
+          <span className="sub-source-body">{source}</span>
+        </div>
+      )}
 
       {/* ── SECTION 1: LỜI THOẠI (TEXTAREA) ── */}
       <textarea
@@ -511,6 +527,20 @@ function SubtitleItem({ sub, index, isSelected, language, onSelect, onUpdate, on
                   <i>I</i>
                 </button>
               </div>
+            </div>
+
+            {/* How wide a line may run before it wraps (also the handles on the video) */}
+            <div className="insp-row" title="Độ rộng tối đa của một dòng, tính theo % chiều ngang video. Kéo rộng để câu dài chỉ chiếm 1–2 dòng.">
+              <label>Độ rộng khung:</label>
+              <input
+                type="range"
+                min={BOX_WIDTH_MIN}
+                max={BOX_WIDTH_MAX}
+                step="1"
+                value={sub.boxWidth ?? DEFAULT_BOX_WIDTH}
+                onChange={(e) => onUpdate({ boxWidth: parseInt(e.target.value, 10) })}
+              />
+              <span>{sub.boxWidth ?? DEFAULT_BOX_WIDTH}%</span>
             </div>
           </div>
 

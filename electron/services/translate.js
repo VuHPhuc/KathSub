@@ -203,6 +203,44 @@ const TARGET_RULES = {
   ].join('\n'),
 };
 
+// Genre the user picked for the video. Small models translate slang and jargon by their dictionary meaning
+// ("Reloading" → "Đang tải"), so each genre spells out the register and the usual renderings.
+const GENRE_RULES = {
+  general: '',
+  gaming: [
+    '- Genre: gaming / esports (FPS, MOBA, battle royale, streams). Read every word as gamer talk first: callouts, gear, map spots, game mechanics. Keep callouts short and urgent.',
+    '- Keep English game terms that gamers keep as is (headshot, clutch, ace, buff, nerf, combo, rank, skin, spawn, rush, carry, feed, team, solo, gank, farm), and keep operator, hero, weapon and map names untranslated.',
+    '- Vietnamese renderings: "Reloading" → "Đang thay đạn" / "Nạp đạn" (NEVER "Đang tải"); "main" (map) → "đường chính" / "cửa chính"; "push" → "đẩy lên" / "lao vào"; "flank" → "đánh vòng" / "bọc hậu"; "nade" → "lựu"; "low" / "one shot" → "máu thấp" / "còn một phát"; "thicc" / "tanky" → "trâu máu"; "camping" → "núp / cắm trại"; "noob" → "gà"; "GG" → "GG".',
+  ].join('\n'),
+  anime: [
+    '- Genre: anime / manga. Render honorifics (-san, -kun, -chan, senpai, onii-chan, sensei) through natural pronouns and forms of address; keep words like "senpai" or "onii-chan" only where fans keep them. Keep attack, technique and title names as fans know them.',
+    '- Keep the characters\' speech quirks and catchphrases recognisable; dramatic lines may be dramatic.',
+  ].join('\n'),
+  adult: [
+    '- Genre: 18+ / intimate. Read words about bodies, desire and sex with their sexual meaning and translate them as natural spoken dialogue, never clinical or medical wording.',
+    '- Vietnamese renderings: "thicc" → "múp" / "dáng ngon"; "hot" / "sexy" (a person) → "nóng bỏng" / "gợi cảm" (never "nóng" as temperature).',
+  ].join('\n'),
+  meme: [
+    '- Genre: meme / Gen Z / internet humour. Translate slang by its internet meaning with equivalent young, casual slang in the target language; keep the joke and the punchline timing.',
+    '- Vietnamese renderings: "no cap" → "nói thật" / "không xạo"; "slay" → "đỉnh" / "chặt đẹp"; "sus" → "sú" / "khả nghi"; "cringe" → "quê" / "cringe"; "bruh" → "bruh" / "trời ạ"; "W" / "L" → "thắng đậm" / "toang"; "based" → "chuẩn bài"; "rizz" → "tán dính"; "lowkey" → "kiểu" / "hơi bị"; "goated" → "đỉnh nóc".',
+  ].join('\n'),
+};
+const genreRules = (genre) => GENRE_RULES[genre] ?? '';
+
+// Speech recognition of a moaning voice garbles words (どちゅどちゅ "thrust, thrust" came back as どっちどっち "which,
+// which"), and a small model then fills the gap with a stock phrase that reverses the line ("…してください" → "Stop it,
+// please!"). Added to the rules whenever the scene is intimate.
+const INTIMATE_RULES = [
+  '- This is an intimate scene transcribed by speech recognition from a moaning, breathless voice: words can be misheard. When a line makes no literal sense, read it as the closest-sounding words that fit the scene (onomatopoeia for thrusting or wet sounds, the cry イク, begging for more) and translate that, keeping it short.',
+  '- Never reverse what a line asks for: "…して / …してください / もっと" asks for it; only やめて, ダメ, いや, 止めて mean "stop" or "no". Do not add "stop", "no" or "don\'t" that the source does not have.',
+].join('\n');
+const GENRE_BRIEF = {
+  gaming: 'a gaming / esports video (gameplay, callouts, streams)',
+  anime: 'an anime / manga',
+  adult: 'an 18+ / intimate video',
+  meme: 'a meme / Gen Z / internet-humour video',
+};
+
 // Bounds per call (BUG-15). A small model can loop inside a structured reply and never stop (an endless glossary);
 // without num_predict that ran until Node's fetch gave up at its fixed 300 s header timeout. The reply is streamed, so
 // that timeout only covers the wait for the first token, and a stalled server is caught by our own idle timer instead.
@@ -310,7 +348,15 @@ function similarity(a, b) {
 }
 
 // Small models sometimes leak JSON punctuation into the text ("Tuyệt vời! {")
-const cleanLine = (t) => String(t ?? '').replace(/^[\s{}[\]]+|[\s{}[\]]+$/g, '');
+// and, mostly in the review pass, a remark about their own wording: "Đó là ý tưởng... (Use 'phải' instead of 'cậu phải'
+// for a more natural flow)". A bracketed part is dropped only when it talks about the translation, and a trailing
+// "Note: …" always; real dialogue in brackets ("(cười)", "(He's lying)") stays.
+const NOTE_CUE = /\b(instead of|more natural|natural (flow|phrasing|sounding)|literal(ly)?|translat\w*|refers? to|i\.e\.|note:|alternatively|could also be|or simply)\b|thay vì|dịch (là|sát|thoát|nghĩa)|nghĩa đen|cho tự nhiên hơn/i;
+const BRACKETED = /\s*[(（[]([^()（）[\]]*)[)）\]]/g;
+const stripNotes = (t) => t
+  .replace(BRACKETED, (m, inner) => (NOTE_CUE.test(inner) ? '' : m))
+  .replace(/\s*(?:[-—–]\s*|\/\/\s*)?\b(?:Note|Translator'?s? note|Ghi chú)\s*:.*$/is, '');
+const cleanLine = (t) => stripNotes(String(t ?? '')).replace(/^[\s{}[\]]+|[\s{}[\]]+$/g, '');
 
 // Small models sometimes answer an adult line with a refusal or a note to the user instead of a translation.
 // Dialogue says "sorry", "I can't…", "I won't help you" and "adult content" too, so only wording no character
@@ -362,18 +408,42 @@ function katakanaCry(text) {
     .replace(CRY_SPAN, (m) => `イ${m.slice(1) === 'く' ? 'ク' : m.slice(1)}`)
     .replace(/(?<=イク\s*)(行|い)く/g, 'イク'); // the last of a repeated いくいく
 }
+// A hoarse, drawn-out イクーッ is heard by Whisper as the cheer イエーイ / イェー ("Yeah!"): in an intimate scene a line
+// that is only that cheer is taken for the cry and respelled イク (keeping its "ー" and "!"), shown to the user too
+// The drawn-out ー is required: a bare いえ is "no".
+const MISHEARD_CRY = /^[\s、。…!！~〜～]*(イ[エェ]|い[えぇ])ー+[イい]?([\s、。…ー!！~〜～っッ]*)$/;
+const respellMisheard = (text) => String(text ?? '').replace(MISHEARD_CRY, (m, cheer, tail) => `イク${tail}`);
+// Less certain mishearings of a moaned イク: a repeated いか/いいか/いが/いぐ (いいかいいかいが, おいがいがいが) or a voiced いぐ
+// (すぐいぐ). Not respelled — いいか is also "listen" / "okay?" — only noted, for the model to judge with the context.
+const LIKELY_CRY = /い[いっ]?[かがぐく][いぃ]?(?:[、…ー～〜!！\s]*い[いっ]?[かがぐく][いぃ]?)+|いぐ(?!さ)/;
+
 // Spelled out per target: a 4B model follows a ready rendering better than a pointer to a rule
 const CRY_NOTE = {
   en: 'probably the climax cry イク: render it as "cum" (e.g. "I\'m gonna cum!"), not physical "go" — unless the context shows someone going somewhere',
   vi: 'probably the climax cry イク: dịch là "ra / sắp ra" (vd "Sắp ra rồi!"), KHÔNG dịch là "đi" — unless the context shows someone going somewhere',
 };
 const cryNote = (tgtLang) => CRY_NOTE[tgtLang] ?? 'probably the climax cry イク (sexual climax), not physical "go" — unless the context shows someone going somewhere';
+const likelyCryNote = (tgtLang, heard) =>
+  `speech recognition probably misheard a moaned climax cry イク as "${heard}"; unless the context clearly says otherwise, ${cryNote(tgtLang).replace(/^probably the climax cry イク: /, '')}`;
 // A literal "go" left in a noted cry line ("Sắp ra rồi… đi rồi!") is treated like an untranslated line —
 // except next to the right rendering: "I'm going to cum!", "Go ahead, cum!", "Ra đi!", "Cho anh ra đi!"
 const LITERAL_GO = {
   en: /^(?![\s\S]*\b(cum\w*|come|coming)\b)[\s\S]*\b(go|goes|going|gone|leave|leaving)\b/i,
   vi: /(?<!\p{L})(?<!(?<!\p{L})ra\s+)đi(?!\p{L})/iu,
 };
+
+// In an intimate scene a garbled line is often filled in with "stop" / "no" the source never says (どっちどっち
+// たがやしてください → "Please stop, please stop"). A translation with a stop/no word is suspicious when the source
+// has no refusal or negation at all.
+const STOP_WORDS = {
+  en: /\b(stop|don'?t|quit|enough|no+)\b/i,
+  vi: /(?<!\p{L})(dừng|đừng|thôi đi|không được)(?!\p{L})/iu,
+};
+const SOURCE_REFUSAL = /やめ|止め|辞め|だめ|ダメ|駄目|いや|イヤ|嫌|やだ|ない|ねえ|ねぇ|ません|ず|ぬ|待って|まって|無理|むり|stop|no/i;
+const REVERSAL_PROBLEM = 'an earlier answer added "stop" / "no" / "don\'t" that the source does not say; translate what the line asks for';
+function intimateReversal(tgtLang, source, translation, intimate) {
+  return intimate && !!STOP_WORDS[tgtLang]?.test(translation) && !SOURCE_REFUSAL.test(String(source ?? ''));
+}
 
 // Japanese/Chinese/Korean characters left in an English or Vietnamese line mean it was not translated
 function looksUntranslated(translation, source, tgtLang) {
@@ -382,9 +452,10 @@ function looksUntranslated(translation, source, tgtLang) {
   return ['en', 'vi'].includes(tgtLang) && /[぀-ヿ一-鿿가-힯]/.test(translation);
 }
 
-async function buildBrief(texts, srcName, tgtName, model, signal) {
+async function buildBrief(texts, srcName, tgtName, model, signal, genre) {
   const system =
     `You prepare a translator's brief for ${srcName} subtitles that will be translated into ${tgtName}. ` +
+    (GENRE_BRIEF[genre] ? `The user says this is ${GENRE_BRIEF[genre]}: read its jargon and slang with that meaning. ` : '') +
     'The transcript comes from speech recognition, has no speaker labels and may contain mis-heard words. ' +
     'Read all of it and report in English: a 2-4 sentence summary of what happens; every named character who speaks or is mentioned ' +
     '(name as written in the source, gender if it can be inferred from name, honorific or speech style, and notes on their role, how they speak and who they talk to); ' +
@@ -428,19 +499,27 @@ function briefText(brief) {
     `\nIntimate scene: ${brief.intimate ? 'yes' : 'no'}`;
 }
 
-async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, { review = false, signal } = {}) {
+async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, { review = false, genre = 'general', signal } = {}) {
   const srcName = langName(srcLang);
   const tgtName = langName(tgtLang);
 
   onProgress?.({ status: 'analyzing', message: 'Đang đọc toàn bộ lời thoại để nắm ngữ cảnh...', percent: 0 });
-  const drafted = await buildBrief(texts, srcName, tgtName, model, signal);
-  // Checked on every line, not just the 400 the brief reads, and ORed in: the model sometimes misses the scene too
-  const intimate = !!drafted?.intimate || looksIntimate(texts);
+  const drafted = await buildBrief(texts, srcName, tgtName, model, signal, genre);
+  // Checked on every line, not just the 400 the brief reads, and ORed in: the model sometimes misses the scene too.
+  // The user saying the video is 18+ counts as well.
+  const intimate = !!drafted?.intimate || genre === 'adult' || looksIntimate(texts);
   const brief = drafted ? { ...drafted, intimate } : intimate ? { summary: '(unavailable)', tone: '(unknown)', intimate } : null;
-  const note = (id) => (intimate && isClimaxCry(texts[id]) ? { note: cryNote(tgtLang) } : {});
+  const misheard = (id) => intimate && MISHEARD_CRY.test(texts[id] ?? '');
+  const note = (id) => {
+    if (!intimate) return {};
+    if (isClimaxCry(texts[id]) || misheard(id)) return { note: cryNote(tgtLang) };
+    const heard = LIKELY_CRY.exec(texts[id] ?? '');
+    return heard ? { note: likelyCryNote(tgtLang, heard[0]) } : {};
+  };
   const literalGo = (id, t) => !!note(id).note && !!LITERAL_GO[tgtLang]?.test(t);
-  // What the model is shown for a line: the cry respelled in katakana (never written back to the user's source)
-  const shown = (id, text = texts[id]) => (note(id).note ? katakanaCry(text) : text);
+  // What the model is shown for a line: the cry respelled in katakana (never written back to the user's source,
+  // except a misheard イエーイ, which is a recognition error)
+  const shown = (id, text = texts[id]) => (misheard(id) ? respellMisheard(text) : note(id).note ? katakanaCry(text) : text);
 
   const system = [
     `You are an expert subtitle translator from ${srcName} into ${tgtName}.`,
@@ -459,11 +538,14 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, {
     '- "corrected_source": the source line with obvious speech-recognition mistakes fixed using the context (a wrong kanji for a homophone, a misheard name). If nothing is wrong copy it unchanged. Never rephrase it.',
     '- A line may carry a "note" from an automatic check of the wording (e.g. that 行く/いく is probably the climax cry). Follow it unless the context clearly contradicts it. Never translate the note itself.',
     '- Always translate; never answer with a refusal, an apology or a comment to the reader.',
+    '- "translation" holds only the subtitle text: never add notes, explanations, alternatives or remarks about word choice, in parentheses or otherwise.',
     TARGET_RULES[tgtLang] ?? '',
+    genreRules(genre),
+    intimate ? INTIMATE_RULES : '',
   ].join('\n');
 
   const translations = new Array(texts.length).fill('');
-  const sources = [...texts];
+  const sources = texts.map((t, id) => (misheard(id) ? respellMisheard(t) : t));
 
   const ask = (ids, start, end) =>
     ollamaChat(
@@ -482,10 +564,11 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, {
       { signal },
     );
 
-  // A cry line answered with a literal "go" gets one more retry that says what was wrong. The rejected draft
-  // itself is not shown: the model copies it verbatim (L-022).
-  const goDrafts = new Set();
-  const problem = (id) => (goDrafts.has(id) ? { problem: 'an earlier answer translated this climax cry as physical "go"; follow the note' } : {});
+  // A cry line answered with a literal "go", or an intimate line turned into "stop", gets one more retry that says what
+  // was wrong. The rejected draft itself is not shown: the model copies it verbatim (L-022).
+  const problems = new Map(); // id → what the earlier answer got wrong
+  const problem = (id) => (problems.has(id) ? { problem: problems.get(id) } : {});
+  const reversed = (id, t) => intimateReversal(tgtLang, texts[id], t, intimate);
 
   // Accept a reply line only if it belongs to this id and is really translated
   const fallback = new Map(); // aligned but suspicious translation, still better than the source
@@ -495,9 +578,10 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, {
     const translation = cleanLine(got.translation);
     // A refusal is never kept, not even as the fallback
     if (looksLikeRefusal(translation, texts[id])) return false;
-    if (looksUntranslated(translation, texts[id], tgtLang) || literalGo(id, translation)) {
+    if (looksUntranslated(translation, texts[id], tgtLang) || literalGo(id, translation) || reversed(id, translation)) {
       if (translation) fallback.set(id, translation);
-      if (literalGo(id, translation)) goDrafts.add(id);
+      if (literalGo(id, translation)) problems.set(id, 'an earlier answer translated this climax cry as physical "go"; follow the note');
+      else if (reversed(id, translation)) problems.set(id, REVERSAL_PROBLEM);
       return false;
     }
     translations[id] = translation;
@@ -526,9 +610,10 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, {
 
     for (const id of ids) {
       if (accept(id, byId.get(id))) continue;
-      // Dropped, shifted or untranslated line → redo it alone, with the same context; a literal "go" gets one more try
+      // Dropped, shifted or untranslated line → redo it alone, with the same context; a literal "go" or a reversal
+      // gets one more try
       let ok = false;
-      for (let attempt = 0; !ok && attempt < (goDrafts.has(id) ? 2 : 1); attempt++) {
+      for (let attempt = 0; !ok && attempt < (problems.has(id) ? 2 : 1); attempt++) {
         try {
           const single = await ask([id], id, id + 1);
           ok = accept(id, single.lines?.[0]);
@@ -544,7 +629,7 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, {
     onProgress?.({ status: 'translating', done: end, total: texts.length });
   }
 
-  if (review) await reviewTranslations({ texts, sources, translations, srcName, tgtName, tgtLang, brief, model, onProgress, note, literalGo, shown, signal });
+  if (review) await reviewTranslations({ texts, sources, translations, srcName, tgtName, tgtLang, brief, model, onProgress, note, literalGo, shown, genre, signal });
   return { translations, sources };
 }
 
@@ -568,7 +653,7 @@ const REVIEW_SCHEMA = {
   required: ['lines'],
 };
 
-async function reviewTranslations({ texts, sources, translations, srcName, tgtName, tgtLang, brief, model, onProgress, note = () => ({}), literalGo = () => false, shown = (id, text) => text, signal }) {
+async function reviewTranslations({ texts, sources, translations, srcName, tgtName, tgtLang, brief, model, onProgress, note = () => ({}), literalGo = () => false, shown = (id, text) => text, genre = 'general', signal }) {
   const system = [
     `You are a senior ${tgtName} subtitle editor checking a translation from ${srcName}.`,
     '',
@@ -581,9 +666,12 @@ async function reviewTranslations({ texts, sources, translations, srcName, tgtNa
     "- Each line keeps only its own content: never move words between lines. \"before\" and \"after\" are context only.",
     '- A line may carry a "note" from an automatic check of the wording (e.g. that 行く/いく is probably the climax cry). Follow it unless the context clearly contradicts it.',
     '- Always return a translation; never a refusal, an apology or a comment to the reader.',
+    '- Return only the subtitle text: never add notes, explanations, alternatives or remarks about your edit (e.g. "(Use X instead of Y...)").',
     TARGET_RULES[tgtLang] ?? '',
+    genreRules(genre),
+    brief?.intimate ? INTIMATE_RULES : '',
   ].join('\n');
-  const pair = (id) => ({ source: shown(id, sources[id]), translation: translations[id] });
+  const pair =(id) => ({ source: shown(id, sources[id]), translation: translations[id] });
 
   for (let start = 0; start < texts.length; start += REVIEW_BATCH) {
     const end = Math.min(start + REVIEW_BATCH, texts.length);
@@ -610,7 +698,8 @@ async function reviewTranslations({ texts, sources, translations, srcName, tgtNa
       const id = Number(line.id);
       const revised = cleanLine(line.translation);
       if (id >= start && id < end && revised && !looksUntranslated(revised, texts[id], tgtLang) && !looksLikeRefusal(revised, texts[id]) &&
-        !(literalGo(id, revised) && !literalGo(id, translations[id]))) {
+        !(literalGo(id, revised) && !literalGo(id, translations[id])) &&
+        !(intimateReversal(tgtLang, texts[id], revised, brief?.intimate) && !intimateReversal(tgtLang, texts[id], translations[id], brief?.intimate))) {
         translations[id] = revised;
       }
     }
@@ -620,7 +709,7 @@ async function reviewTranslations({ texts, sources, translations, srcName, tgtNa
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 // signal (optional): the job's AbortSignal; a cancelled run returns { cancelled: true } and keeps the loaded NLLB model
-async function translateSubtitles({ subtitles, sourceLang, targetLang, engine, ollamaModel, outputMode, review }, onProgress, { signal } = {}) {
+async function translateSubtitles({ subtitles, sourceLang, targetLang, engine, ollamaModel, outputMode, review, genre }, onProgress, { signal } = {}) {
   try {
     throwIfCancelled(signal);
     const texts = subtitles.map((s) => s.text);
@@ -649,7 +738,7 @@ async function translateSubtitles({ subtitles, sourceLang, targetLang, engine, o
     let sources = texts;
     if (engine === 'ollama') {
       if (!ollamaModel) throw new Error('Chưa chọn model Ollama');
-      ({ translations: translated, sources } = await translateWithOllama(texts, src, targetLang, ollamaModel, report, { review, signal }));
+      ({ translations: translated, sources } = await translateWithOllama(texts, src, targetLang, ollamaModel, report, { review, genre, signal }));
     } else {
       translated = await translateWithNllb(texts, src, targetLang, report, signal);
     }
@@ -657,7 +746,13 @@ async function translateSubtitles({ subtitles, sourceLang, targetLang, engine, o
 
     return {
       success: true,
-      subtitles: subtitles.map((s, i) => ({ ...s, text: mergeText(sources[i], translated[i] || s.text, outputMode) })),
+      // sourceText: the line before translation, shown above the translation in the editor. A line translated
+      // a second time keeps the very first original.
+      subtitles: subtitles.map((s, i) => ({
+        ...s,
+        text: mergeText(sources[i], translated[i] || s.text, outputMode),
+        sourceText: s.sourceText || sources[i],
+      })),
     };
   } catch (err) {
     if (signal?.aborted || err.cancelled) return { ...CANCELLED_RESULT };

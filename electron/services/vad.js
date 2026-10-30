@@ -73,7 +73,7 @@ function speechRegions(probs, { threshold = 0.5, minSpeechS = 0.25, minSilenceS 
 
 // Group speech regions into Whisper-sized chunks (≤ maxS seconds), splitting over-long regions
 // at their least speech-like window so no word is cut in half.
-function groupChunks(regions, probs, maxS = 25) {
+function groupChunks(regions, probs, maxS = 25, joinGapS = 1.5) {
   const step = WINDOW / SR;
   const pieces = [];
   for (const r of regions) {
@@ -92,8 +92,8 @@ function groupChunks(regions, probs, maxS = 25) {
   const chunks = [];
   for (const p of pieces) {
     const last = chunks[chunks.length - 1];
-    // Join short neighbouring pieces (gap < 1.5 s) so Whisper sees whole sentences with context
-    if (last && p.end - last.start <= maxS && p.start - last.end < 1.5) last.end = p.end;
+    // Join short neighbouring pieces (gap < 1.5 s by default) so Whisper sees whole sentences with context
+    if (last && p.end - last.start <= maxS && p.start - last.end < joinGapS) last.end = p.end;
     else chunks.push({ ...p });
   }
   return chunks;

@@ -5,7 +5,9 @@ import OllamaSetup from './OllamaSetup';
 import ModelCache from './ModelCache';
 import { loadPref, savePref } from '../../utils/prefs';
 
-const MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo'];
+const MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo', 'anime-ja'];
+// Models that only transcribe one language (electron/services/whisper.js MODEL_OPTIONS)
+const MODEL_LANG = { 'anime-ja': 'ja' };
 const SOURCE_LANGS = [
   { code: 'auto', labelKey: 'langAuto' },
   { code: 'ja',   labelKey: 'langJa' },
@@ -22,6 +24,9 @@ const TARGET_LANGS = [
   { code: 'ko',   labelKey: 'langKo' },
   { code: 'zh',   labelKey: 'langZh' },
 ];
+
+// Video genres the Ollama prompt knows (electron/services/translate.js GENRE_RULES)
+const GENRES = ['general', 'gaming', 'anime', 'adult', 'meme'];
 
 export default function AutoTranscribe({ addToast }) {
   const { videoPath, setShowAutoPanel, setSubtitles, subtitleStyle, language: uiLang, subtitles: currentSubs } = useStore();
@@ -45,6 +50,7 @@ export default function AutoTranscribe({ addToast }) {
   const [ollamaModel, setOllamaModel] = useState(saved.ollamaModel);
   const [includeVocals, setIncludeVocals] = useState(saved.includeVocals);
   const [review,     setReview]     = useState(saved.review);
+  const [genre,      setGenre]      = useState(saved.genre ?? 'general'); // steers Ollama's slang / jargon
   const [setupBusy,  setSetupBusy]  = useState(false); // Ollama install / start / pull in progress
   const [cacheBusy,  setCacheBusy]  = useState(false); // a model is being deleted from the cache
   const [step,       setStep]       = useState('');
@@ -55,6 +61,8 @@ export default function AutoTranscribe({ addToast }) {
   const cancelRef = useRef(false);
 
   const translateExisting = jobMode === 'translate';
+  // A single-language model fixes the spoken language (the user's own choice is kept for the other models)
+  const localLang = transcribeMode === 'local' ? MODEL_LANG[modelSize] : undefined;
   const translating = targetLang !== 'none';
   const totalSteps = translating ? 2 : 1;
   const ollamaReady = !!(ollama?.running && ollamaModel);
@@ -88,8 +96,8 @@ export default function AutoTranscribe({ addToast }) {
   useEffect(() => refreshOllama(), [refreshOllama]);
 
   useEffect(() => {
-    savePref('transcribeOptions', { jobMode, existingSrcLang, transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review });
-  }, [jobMode, existingSrcLang, transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review]);
+    savePref('transcribeOptions', { jobMode, existingSrcLang, transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review, genre });
+  }, [jobMode, existingSrcLang, transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review, genre]);
 
   // Throws a `cancelled` error when the user pressed Cancel or the step reports it was cancelled
   const checkCancelled = (res) => {
@@ -129,7 +137,7 @@ export default function AutoTranscribe({ addToast }) {
   const handleTranslateExisting = () => runJob(async () => {
     const source = useStore.getState().subtitles
       .filter((s) => s.text && s.text.trim())
-      .map((s) => ({ id: s.id, startTime: s.startTime, endTime: s.endTime, text: s.text }));
+      .map((s) => ({ id: s.id, startTime: s.startTime, endTime: s.endTime, text: s.text, sourceText: s.sourceText }));
     if (!source.length) throw new Error(t('translateExistingEmpty', uiLang));
 
     setStep(t('stepTranslateExisting', uiLang));
@@ -142,6 +150,7 @@ export default function AutoTranscribe({ addToast }) {
       ollamaModel,
       outputMode,
       review,
+      genre,
     });
     checkCancelled(res);
     if (!res.success) throw new Error(errorMessage(res, uiLang));
@@ -155,11 +164,11 @@ export default function AutoTranscribe({ addToast }) {
       if (typeof s.text !== 'string' || s.text === orig) return false;
       return !(outputMode === 'bilingual' && s.text.endsWith(`\n${orig}`));
     };
-    const changed = new Map(res.subtitles.filter(translatedLine).map((s) => [s.id, s.text]));
+    const changed = new Map(res.subtitles.filter(translatedLine).map((s) => [s.id, { text: s.text, sourceText: s.sourceText }]));
     if (changed.size === 0) throw new Error(t('translateNothing', uiLang)); // timeline left as it was
 
     // Untranslated lines keep their text (no "original\noriginal" in bilingual mode)
-    useStore.getState().setSubtitleTexts(changed);
+    useStore.getState().patchSubtitles(changed);
     if (changed.size < source.length) {
       addToast(t('translatePartial', uiLang).replace('{done}', () => changed.size).replace('{total}', () => source.length), 'warning');
     } else {
@@ -207,6 +216,7 @@ export default function AutoTranscribe({ addToast }) {
           ollamaModel,
           outputMode,
           review,
+          genre,
         });
         // Cancel means cancel: nothing from this run is written to the timeline
         checkCancelled(translated);
@@ -321,9 +331,9 @@ export default function AutoTranscribe({ addToast }) {
               <select
                 className="studio-select"
                 id="select-lang"
-                value={subLang}
+                value={localLang ?? subLang}
                 onChange={(e) => setSubLang(e.target.value)}
-                disabled={running}
+                disabled={running || !!localLang}
               >
                 {SOURCE_LANGS.map((l) => (
                   <option key={l.code} value={l.code}>{t(l.labelKey, uiLang)}</option>
@@ -349,6 +359,7 @@ export default function AutoTranscribe({ addToast }) {
           )}
 
           <div className="at-hint">
+            {localLang && <>{t('animeModelNote', uiLang)} </>}
             {transcribeMode === 'local' ? t('localNote', uiLang) : t('cloudNote', uiLang)}
           </div>
         </section>
@@ -468,6 +479,24 @@ export default function AutoTranscribe({ addToast }) {
                   : t('ollamaNote', uiLang)}
                 {engine === 'nllb' && !ollamaReady && <> {t('ollamaHint', uiLang)}</>}
               </div>
+
+              {engine === 'ollama' && (
+                <label className="at-field">
+                  <span className="at-label">{t('videoGenre', uiLang)}</span>
+                  <select
+                    className="studio-select"
+                    id="select-genre"
+                    value={genre}
+                    onChange={(e) => setGenre(e.target.value)}
+                    disabled={running}
+                    title={t('videoGenreHint', uiLang)}
+                  >
+                    {GENRES.map((g) => (
+                      <option key={g} value={g}>{t(`genre_${g}`, uiLang)}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
 
               {engine === 'ollama' && (
                 <div className="switch-row at-switch">

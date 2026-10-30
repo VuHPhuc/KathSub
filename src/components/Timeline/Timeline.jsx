@@ -141,6 +141,18 @@ export default function Timeline() {
   useEffect(() => {
     if (!activeDrag) return;
 
+    // Clips on one track never overlap: the dragged clip stays between the end of the one before and the start of
+    // the one after. Read live from the store so the bounds follow the clip as it moves.
+    const room = () => {
+      const { subtitles: subs, overlays: ovs } = useStore.getState();
+      const list = [...(activeDrag.itemType === 'sub' ? subs : ovs)].sort((a, b) => a.startTime - b.startTime);
+      const idx = list.findIndex((it) => it.id === activeDrag.id);
+      return {
+        lo: idx > 0 ? list[idx - 1].endTime : 0,
+        hi: idx >= 0 && idx < list.length - 1 ? list[idx + 1].startTime : videoDuration,
+      };
+    };
+
     const handleMouseMove = (e) => {
       // Cơ chế an toàn: nếu chuột đã nhả (buttons === 0), lập tức kết thúc drag
       if (e.buttons === 0) {
@@ -191,6 +203,13 @@ export default function Timeline() {
           newStart = Math.max(0, videoDuration - duration);
         }
 
+        // Stop at the neighbours (a clip that already overlapped them before this change is left free)
+        const { lo, hi } = room();
+        if (hi - lo >= duration - 0.001) {
+          newStart = Math.max(lo, Math.min(hi - duration, newStart));
+          newEnd = newStart + duration;
+        }
+
         newStart = Math.round(newStart * 100) / 100;
         newEnd = Math.round(newEnd * 100) / 100;
 
@@ -202,7 +221,7 @@ export default function Timeline() {
       } else if (activeDrag.type === 'resize-left') {
         let newStart = activeDrag.origStart + deltaTime;
         newStart = getSnappedTime(newStart, activeDrag.id);
-        newStart = Math.max(0, Math.min(activeDrag.origEnd - 0.2, newStart));
+        newStart = Math.max(Math.min(room().lo, activeDrag.origStart), Math.min(activeDrag.origEnd - 0.2, newStart));
         newStart = Math.round(newStart * 100) / 100;
 
         if (activeDrag.itemType === 'sub') {
@@ -213,7 +232,7 @@ export default function Timeline() {
       } else if (activeDrag.type === 'resize-right') {
         let newEnd = activeDrag.origEnd + deltaTime;
         newEnd = getSnappedTime(newEnd, activeDrag.id);
-        newEnd = Math.min(videoDuration, Math.max(activeDrag.origStart + 0.2, newEnd));
+        newEnd = Math.min(Math.max(room().hi, activeDrag.origEnd), Math.max(activeDrag.origStart + 0.2, newEnd));
         newEnd = Math.round(newEnd * 100) / 100;
 
         if (activeDrag.itemType === 'sub') {
@@ -489,15 +508,18 @@ export default function Timeline() {
                   if (e.target === e.currentTarget) handleRulerMouseDown(e);
                 }}
               >
-                {subtitles.map((sub) => {
+                {subtitles.map((sub, i) => {
                   const left = (sub.startTime / validDuration) * totalW;
-                  const width = Math.max(16, ((sub.endTime - sub.startTime) / validDuration) * totalW);
+                  // A very short clip is drawn at least 16 px wide, but never over the next clip
+                  const nextLeft = i < subtitles.length - 1 ? (subtitles[i + 1].startTime / validDuration) * totalW : Infinity;
+                  const realW = ((sub.endTime - sub.startTime) / validDuration) * totalW;
+                  const width = Math.max(realW, Math.min(16, nextLeft - left - 1));
                   const isSelected = sub.id === selectedId && selectedTrackType === 'subtitle';
 
                   return (
                     <div
                       key={sub.id}
-                      className={`tl-clip tl-clip-sub ${isSelected ? 'tl-clip-selected' : ''}`}
+                      className={`tl-clip tl-clip-sub ${isSelected ? 'tl-clip-selected' : ''}${width < 60 ? ' tl-clip-narrow' : ''}`}
                       style={{ left, width }}
                       onMouseDown={(e) => {
                         e.stopPropagation();

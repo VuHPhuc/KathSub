@@ -344,6 +344,13 @@ html, body, #root {
 }
 
 /* ─── Video Player ───────────────────────────────────────────────────────────── */
+/* Picture on top, controls bar below it (not over the picture, where it hid subtitles near the bottom) */
+.video-player {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 .video-player-wrapper {
   flex: 1;
   position: relative;
@@ -373,6 +380,8 @@ html, body, #root {
 .subtitle-box {
   position: absolute;
   transform: translate(-50%, -50%);
+  width: max-content;
+  text-align: center;
   cursor: grab;
   pointer-events: all;
   user-select: none;
@@ -383,7 +392,7 @@ html, body, #root {
   text-align: center;
   white-space: pre-wrap;
   line-height: 1.4;
-  max-width: 80vw;
+  max-width: 100%;
   word-break: break-word;
 }
 .subtitle-box.selected .subtitle-text {
@@ -398,23 +407,32 @@ html, body, #root {
   border-radius: 4px;
   pointer-events: none;
 }
+/* Side handles: drag to change how wide a line may run before it wraps */
+.subtitle-resize-handle {
+  position: absolute;
+  top: 50%;
+  width: 8px;
+  height: 22px;
+  margin-top: -11px;
+  background: var(--accent);
+  border: 1px solid #fff;
+  border-radius: 3px;
+  cursor: ew-resize;
+  z-index: 1;
+}
+.subtitle-resize-handle.left { left: -9px; }
+.subtitle-resize-handle.right { right: -9px; }
 
 /* Video controls bar */
 .video-controls {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background: linear-gradient(to top, rgba(0,0,0,0.85), transparent);
-  padding: 24px 16px 12px;
+  flex-shrink: 0;
+  background: #0b0b0f;
+  border-top: 1px solid var(--border-subtle);
+  padding: 8px 16px 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  opacity: 0;
-  transition: opacity var(--transition);
-  z-index: 20;
+  gap: 6px;
 }
-.video-player-wrapper:hover .video-controls { opacity: 1; }
 .video-controls-row {
   display: flex;
   align-items: center;
@@ -629,6 +647,32 @@ html, body, #root {
 }
 
 /* Section 1: Textarea */
+/* The line before translation, read-only above the translation */
+.sub-source-text {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 5px 8px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+  cursor: text;
+}
+.sub-source-label {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
 .studio-textarea {
   width: 100%;
   background: var(--bg-panel);
@@ -1395,6 +1439,10 @@ html, body, #root {
   color: rgba(255, 255, 255, 0.7);
   font-family: monospace;
 }
+/* Short clips: only the text (cut off), no tag or duration wrapping onto a second row */
+.tl-clip-narrow .tl-clip-body { padding: 0 4px; gap: 0; }
+.tl-clip-narrow .tl-clip-tag,
+.tl-clip-narrow .tl-clip-duration { display: none; }
 
 /* Audio Track */
 .tl-lane-audio { background: #0f1c18; }
