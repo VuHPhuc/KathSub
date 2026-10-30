@@ -146,37 +146,44 @@ const MAX_CHUNK_S = 25;    // Whisper sees 30 s windows; leave room so chunks en
 const MAX_SEGMENT_S = 8;   // a subtitle line longer than this is re-split at pauses
 
 // v3 silently falls back to English when no language is given, so detect it ourselves:
-// one decoder step after <|startoftranscript|> scores every language token.
+// one decoder step after <|startoftranscript|> scores every language token. The 3 longest speech
+// chunks vote (summed probabilities), so an opening of music or breathing cannot decide alone.
 async function detectLanguage(pipe, audio, chunks) {
   const { Tensor } = await import('@huggingface/transformers');
-  const first = chunks[0] ?? { start: 0, end: 30 };
-  const slice = audio.subarray(Math.floor(first.start * SR), Math.floor((first.start + 29.5) * SR));
-  const { input_features } = await pipe.processor(slice);
+  const picks = [...chunks].sort((a, b) => (b.end - b.start) - (a.end - a.start)).slice(0, 3);
+  if (!picks.length) picks.push({ start: 0, end: 30 });
 
   const t2i = pipe.tokenizer.model.tokens_to_ids;
   const sot = t2i.get('<|startoftranscript|>');
-  const out = await pipe.model({
-    input_features,
-    decoder_input_ids: new Tensor('int64', BigInt64Array.from([BigInt(sot)]), [1, 1]),
-  });
-  const logits = out.logits.data;
-  const offset = logits.length - out.logits.dims.at(-1);
-
-  let best = null;
-  let bestScore = -Infinity;
-  for (const [token, id] of t2i) {
+  const langs = [...t2i].flatMap(([token, id]) => {
     const m = /^<\|([a-z]{2,3})\|>$/.exec(token);
-    if (m && logits[offset + id] > bestScore) {
-      bestScore = logits[offset + id];
-      best = m[1];
-    }
+    return m ? [[m[1], id]] : [];
+  });
+  const votes = new Map();
+  for (const c of picks) {
+    const slice = audio.subarray(Math.floor(c.start * SR), Math.floor(Math.min(c.end, c.start + 29.5) * SR));
+    const { input_features } = await pipe.processor(slice);
+    const out = await pipe.model({
+      input_features,
+      decoder_input_ids: new Tensor('int64', BigInt64Array.from([BigInt(sot)]), [1, 1]),
+    });
+    const logits = out.logits.data;
+    const offset = logits.length - out.logits.dims.at(-1);
+    // Softmax over the language tokens only
+    const max = Math.max(...langs.map(([, id]) => logits[offset + id]));
+    const exps = langs.map(([, id]) => Math.exp(logits[offset + id] - max));
+    const sum = exps.reduce((n, e) => n + e, 0);
+    langs.forEach(([lang], k) => votes.set(lang, (votes.get(lang) ?? 0) + exps[k] / sum));
   }
-  return best;
+  return [...votes].reduce((best, v) => (v[1] > best[1] ? v : best), [null, -1])[0];
 }
 
 // What Whisper invents for breathing or silence (YouTube outros it was trained on); only dropped in
 // non-speech sounds, where it cannot be what was said
 const NON_SPEECH_HALLUCINATIONS = /ご視聴|ご清聴|チャンネル登録|字幕|視聴者|thanks? (you )?for watching|subscribe|subtitles? by/i;
+// Lines that are only sound tags or symbols ("♪～", "(音楽)", "【拍手】", "(笑)") say nothing
+const isTagOnly = (text) =>
+  !String(text).replace(/[(（【[［][^)）】\]］]*[)）】\]］]/g, '').replace(/[\s\p{P}\p{S}]/gu, '');
 
 // Whisper's own hallucination test: looping text compresses far better than real speech
 function looksLikeLoop(text) {
@@ -203,7 +210,7 @@ async function transcribeSpan(pipe, audio, start, end, lang, vocal = false) {
 
   const round = (t) => Math.round(t * 100) / 100;
   return (r.chunks ?? [])
-    .filter((c) => !(vocal && NON_SPEECH_HALLUCINATIONS.test(c.text)))
+    .filter((c) => !(vocal && (NON_SPEECH_HALLUCINATIONS.test(c.text) || isTagOnly(c.text))))
     .map((c) => {
       const s = Math.min(end, start + (c.timestamp?.[0] ?? 0));
       let e = Math.min(end, start + (c.timestamp?.[1] ?? dur));
