@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import useStore from '../../store/subtitleStore';
-import { t } from '../../locales';
+import { t, errorMessage } from '../../locales';
 import {
   IconFolder,
   IconSubtitles,
   IconWand,
   IconExport,
   IconFileText,
+  IconFileImport,
 } from '../Icons/StudioIcons';
+import { parseSubtitles } from '../../utils/subtitleParser';
+
+const makeSubId = () => `sub_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
 function renderOverlayToDataUrl(ov) {
   if (ov.type === 'image' && ov.content) {
@@ -63,6 +67,9 @@ export default function Toolbar({ addToast }) {
 
   const [exportProgress, setExportProgress] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  // Parsed file waiting for "replace / merge / cancel" when the timeline already has subtitles
+  const [pendingImport, setPendingImport] = useState(null);
 
   const hasVideo = Boolean(videoPath);
   const hasContent = subtitles.length > 0 || overlays.length > 0;
@@ -151,6 +158,59 @@ export default function Toolbar({ addToast }) {
     }
   };
 
+  // ── Import subtitle file (.srt / .vtt / .ass / .ssa) ────────────────────────
+  // Needs an open video: the timeline only exists with one, and opening a video clears the subtitles.
+  const applyImport = ({ subs, fileName, encoding, stats }, mode) => {
+    const store = useStore.getState();
+    store.setSubtitles(mode === 'merge' ? [...store.subtitles, ...subs] : subs);
+    let msg = `${t('importDone', language)} ${subs.length} — ${fileName}`;
+    if (encoding && encoding !== 'utf-8') msg += ` (${t('importEncoding', language)} ${encoding})`;
+    addToast(msg, 'success');
+    const dropped = stats.dropped.empty + stats.dropped.badTime;
+    if (dropped || stats.fixedTimes) {
+      addToast(`${t('importSkipped', language)} ${dropped} · ${t('importFixed', language)} ${stats.fixedTimes}`, 'info');
+    }
+    const duration = store.videoDuration;
+    const outside = duration > 0 ? subs.filter((s) => s.startTime >= duration).length : 0;
+    if (outside) addToast(`⚠️ ${outside} ${t('importBeyondVideo', language)}`, 'warning');
+  };
+
+  const handleImportSubtitle = async () => {
+    if (!window.electron?.importSubtitle || importing || !hasVideo) return;
+    setImporting(true);
+    try {
+      const res = await window.electron.importSubtitle();
+      if (!res || res.canceled) return;
+      if (!res.success) {
+        addToast(`${t('importFailed', language)} ${errorMessage(res, language)}`, 'error');
+        return;
+      }
+
+      const { cues, stats } = parseSubtitles(res.content, res.fileName);
+      if (!cues.length) {
+        addToast(`${t('importFailed', language)} ${t('importNoCues', language)}`, 'error');
+        return;
+      }
+      const { subtitleStyle } = useStore.getState();
+      const subs = cues.map((c) => ({ id: makeSubId(), startTime: c.start, endTime: c.end, text: c.text, ...subtitleStyle }));
+      const parsed = { subs, fileName: res.fileName, encoding: res.encoding, stats };
+
+      if (useStore.getState().subtitles.length > 0) setPendingImport(parsed);
+      else applyImport(parsed, 'replace');
+    } catch (err) {
+      console.error('importSubtitle error:', err);
+      addToast(`${t('importFailed', language)} ${err.message}`, 'error');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const resolvePendingImport = (mode) => {
+    const pending = pendingImport;
+    setPendingImport(null);
+    if (pending && mode !== 'cancel') applyImport(pending, mode);
+  };
+
   // ── Open video file dialog ──────────────────────────────────────────────────
   const handleOpenVideo = async () => {
     if (!window.electron) return;
@@ -173,6 +233,19 @@ export default function Toolbar({ addToast }) {
         <IconFolder size={15} />
         <span>{t('openVideo', language)}</span>
       </button>
+
+      {/* Import subtitle file — the span carries the tooltip, a disabled button gets no mouse events */}
+      <span className="tb-btn-wrap" title={hasVideo ? t('importSubtitleHint', language) : t('importNeedVideo', language)}>
+        <button
+          className="btn btn-secondary"
+          id="tb-import-subtitle"
+          onClick={handleImportSubtitle}
+          disabled={!hasVideo || importing}
+        >
+          <IconFileImport size={15} />
+          <span>{importing ? t('importing', language) : t('importSubtitle', language)}</span>
+        </button>
+      </span>
 
       {hasVideo && (
         <span className="tb-video-title" title={videoName}>
@@ -249,6 +322,40 @@ export default function Toolbar({ addToast }) {
         <IconExport size={15} />
         <span>{isExporting ? `Đang ghi ${exportProgress}%...` : 'Xuất Video MP4'}</span>
       </button>
+
+      {/* Timeline already has subtitles: replace them, merge, or cancel the import */}
+      {pendingImport && (
+        <div className="modal-overlay" onClick={() => resolvePendingImport('cancel')}>
+          <div
+            className="modal import-confirm"
+            id="import-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.key === 'Escape' && resolvePendingImport('cancel')}
+          >
+            <div className="at-title">{t('importConfirmTitle', language)}</div>
+            <div className="import-confirm-text">
+              {t('importConfirmText', language)
+                // Replacer functions: a file name with "$&" or "$'" must be shown literally (REV-06)
+                .replace('{current}', () => subtitles.length)
+                .replace('{count}', () => pendingImport.subs.length)
+                .replace('{file}', () => pendingImport.fileName)}
+            </div>
+            <div className="at-footer">
+              <button className="btn btn-ghost" id="btn-import-cancel" onClick={() => resolvePendingImport('cancel')}>
+                {t('cancel', language)}
+              </button>
+              <button className="btn btn-secondary" id="btn-import-merge" onClick={() => resolvePendingImport('merge')}>
+                {t('importMerge', language)}
+              </button>
+              <button className="btn btn-primary" id="btn-import-replace" autoFocus onClick={() => resolvePendingImport('replace')}>
+                {t('importReplace', language)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

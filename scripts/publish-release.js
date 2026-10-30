@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
  * scripts/publish-release.js
- * Xuất bản GitHub Release v1.4.1 cho KathSub (VuHPhuc/KathSub).
+ * Xuất bản GitHub Release cho KathSub (VuHPhuc/KathSub).
  * 
  * Tính năng:
+ * - Đọc phiên bản động từ package.json.
  * - Lấy GitHub Token tự động từ `git credential fill` hoặc biến môi trường GITHUB_TOKEN / GH_TOKEN.
- * - Đọc RELEASE_NOTES_1.4.1.md chuẩn UTF-8 (tránh mojibake L-019).
- * - Tạo/Cập nhật GitHub Release v1.4.1 (draft: false, prerelease: false).
- * - Stream upload 4 file: KathSub-Setup-1.4.1.exe, KathSub Portable 1.4.1.exe, .blockmap, latest.yml.
+ * - Đọc RELEASE_NOTES_<version>.md chuẩn UTF-8 (tránh mojibake L-019).
+ * - Tạo/Cập nhật GitHub Release (draft: false, prerelease: false).
+ * - Stream upload 4 file: KathSub-Setup-<version>.exe, KathSub Portable <version>.exe, .blockmap, latest.yml.
  * - Idempotent: Tự xóa asset cũ nếu bị đứt mạng upload lại (tránh lỗi 422 already_exists).
  * - Kiểm chứng sau phát hành qua API /releases/latest.
  */
@@ -17,19 +18,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 const child_process = require('node:child_process');
 
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+const pkg = require(path.join(PROJECT_ROOT, 'package.json'));
+
 const OWNER = 'VuHPhuc';
 const REPO = 'KathSub';
-const TAG = 'v1.4.1';
-const RELEASE_NAME = 'KathSub v1.4.1 — Bắt tiếng rên chuẩn hơn & dịch đúng ngữ cảnh';
+const VERSION = pkg.version;
+const TAG = `v${VERSION}`;
+const RELEASE_NAME = `KathSub v${VERSION} — Nhập phụ đề có sẵn, dịch trực tiếp timeline, hủy tác vụ & quản lý cache model`;
 
-const PROJECT_ROOT = path.resolve(__dirname, '..');
 const RELEASE_DIR = path.join(PROJECT_ROOT, 'release');
-const NOTES_FILE = path.join(RELEASE_DIR, 'RELEASE_NOTES_1.4.1.md');
+const NOTES_FILE = path.join(RELEASE_DIR, `RELEASE_NOTES_${VERSION}.md`);
 
 const ASSETS = [
-  { name: 'KathSub-Setup-1.4.1.exe', path: path.join(RELEASE_DIR, 'KathSub-Setup-1.4.1.exe'), type: 'application/octet-stream' },
-  { name: 'KathSub Portable 1.4.1.exe', path: path.join(RELEASE_DIR, 'KathSub Portable 1.4.1.exe'), type: 'application/octet-stream' },
-  { name: 'KathSub-Setup-1.4.1.exe.blockmap', path: path.join(RELEASE_DIR, 'KathSub-Setup-1.4.1.exe.blockmap'), type: 'application/octet-stream' },
+  { name: `KathSub-Setup-${VERSION}.exe`, path: path.join(RELEASE_DIR, `KathSub-Setup-${VERSION}.exe`), type: 'application/octet-stream' },
+  { name: `KathSub Portable ${VERSION}.exe`, path: path.join(RELEASE_DIR, `KathSub Portable ${VERSION}.exe`), type: 'application/octet-stream' },
+  { name: `KathSub-Setup-${VERSION}.exe.blockmap`, path: path.join(RELEASE_DIR, `KathSub-Setup-${VERSION}.exe.blockmap`), type: 'application/octet-stream' },
   { name: 'latest.yml', path: path.join(RELEASE_DIR, 'latest.yml'), type: 'application/octet-stream' },
 ];
 
@@ -55,7 +59,6 @@ function getGitHubToken() {
       }
     }
   } catch (err) {
-    // Thử fallback qua gh CLI auth token nếu có
     try {
       const ghToken = child_process.execSync('gh auth token', {
         encoding: 'utf8',
@@ -214,10 +217,10 @@ async function main() {
 
   // Kiểm tra latest.yml
   const latestYmlContent = fs.readFileSync(path.join(RELEASE_DIR, 'latest.yml'), 'utf8');
-  if (!latestYmlContent.includes('version: 1.4.1') || !latestYmlContent.includes('KathSub-Setup-1.4.1.exe')) {
-    throw new Error('Nội dung latest.yml không khớp phiên bản 1.4.1 hoặc tên file installer!');
+  if (!latestYmlContent.includes(`version: ${VERSION}`) || !latestYmlContent.includes(`KathSub-Setup-${VERSION}.exe`)) {
+    throw new Error(`Nội dung latest.yml không khớp phiên bản ${VERSION} hoặc tên file installer!`);
   }
-  console.log('   ✓ latest.yml hợp lệ (khớp phiên bản 1.4.1 và tên installer)\n');
+  console.log(`   ✓ latest.yml hợp lệ (khớp phiên bản ${VERSION} và tên installer)\n`);
 
   // 2. Lấy GitHub Token
   console.log('2. Xác thực GitHub Token:');
@@ -280,7 +283,6 @@ async function main() {
 
   // 5. Upload Assets
   console.log('5. Tải lên danh sách assets:');
-  // Lấy danh sách asset hiện tại để tránh lỗi trùng lặp (422 already_exists)
   const currentAssetsRes = await githubRequest(`/repos/${OWNER}/${REPO}/releases/${release.id}/assets`, {}, token);
   const currentAssets = currentAssetsRes.data || [];
 
@@ -324,4 +326,3 @@ main().catch((err) => {
   console.error('\n❌ [LỖI PHÁT HÀNH]:', err.message);
   process.exit(1);
 });
-

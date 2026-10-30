@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import useStore from '../../store/subtitleStore';
-import { t } from '../../locales';
+import { t, errorMessage } from '../../locales';
 import OllamaSetup from './OllamaSetup';
+import ModelCache from './ModelCache';
 import { loadPref, savePref } from '../../utils/prefs';
 
 const MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo'];
@@ -23,13 +24,16 @@ const TARGET_LANGS = [
 ];
 
 export default function AutoTranscribe({ addToast }) {
-  const { videoPath, setShowAutoPanel, setSubtitles, subtitleStyle, language: uiLang } = useStore();
+  const { videoPath, setShowAutoPanel, setSubtitles, subtitleStyle, language: uiLang, subtitles: currentSubs } = useStore();
 
   // Last choices are remembered across restarts (the API key is not stored)
   const [saved] = useState(() => loadPref('transcribeOptions', {
     transcribeMode: 'local', modelSize: 'large-v3-turbo', subLang: 'auto', targetLang: 'none',
     engine: 'nllb', outputMode: 'translated', ollamaModel: '', includeVocals: false, review: true,
   }));
+  // 'transcribe': recognise speech in the video (then optionally translate) · 'translate': translate the timeline's subtitles
+  const [jobMode,    setJobMode]    = useState(saved.jobMode ?? 'transcribe');
+  const [existingSrcLang, setExistingSrcLang] = useState(saved.existingSrcLang ?? 'ja'); // no Whisper detection here
   const [transcribeMode, setTranscribeMode] = useState(saved.transcribeMode); // 'cloud' | 'local'
   const [apiKey,     setApiKey]     = useState('');
   const [modelSize,  setModelSize]  = useState(saved.modelSize);
@@ -42,15 +46,27 @@ export default function AutoTranscribe({ addToast }) {
   const [includeVocals, setIncludeVocals] = useState(saved.includeVocals);
   const [review,     setReview]     = useState(saved.review);
   const [setupBusy,  setSetupBusy]  = useState(false); // Ollama install / start / pull in progress
+  const [cacheBusy,  setCacheBusy]  = useState(false); // a model is being deleted from the cache
   const [step,       setStep]       = useState('');
   const [progress,   setProgress]   = useState({ message: '', percent: 0 });
   const [running,    setRunning]    = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  // Read between steps: a cancel that lands between two IPC calls must stop the next one from starting
+  const cancelRef = useRef(false);
 
+  const translateExisting = jobMode === 'translate';
   const translating = targetLang !== 'none';
   const totalSteps = translating ? 2 : 1;
   const ollamaReady = !!(ollama?.running && ollamaModel);
-  const blocked = running || setupBusy;
-  const canStart = !blocked && !(translating && engine === 'ollama' && !ollamaReady);
+  const blocked = running || setupBusy || cacheBusy;
+  const textLines = currentSubs.filter((s) => s.text && s.text.trim()).length;
+  // Why "translate existing" cannot start (shown under the form), or '' when it can
+  const existingBlocker = !translateExisting ? ''
+    : textLines === 0 ? t('translateExistingEmpty', uiLang)
+      : !translating ? t('translateChooseTarget', uiLang)
+        : existingSrcLang === targetLang ? t('translateSameLang', uiLang)
+          : '';
+  const canStart = !blocked && !existingBlocker && !(translating && engine === 'ollama' && !ollamaReady);
 
   // Subscribe to transcribe/translate progress events
   useEffect(() => {
@@ -60,8 +76,8 @@ export default function AutoTranscribe({ addToast }) {
     return unsub;
   }, []);
 
-  // Check whether Ollama is installed / running and which models it has
-  useEffect(() => {
+  // Check whether Ollama is installed / running and which models it has (again after a model is deleted)
+  const refreshOllama = useCallback(() => {
     window.electron.ollamaStatus?.().then((res) => {
       if (!res) return;
       setOllama(res);
@@ -69,31 +85,111 @@ export default function AutoTranscribe({ addToast }) {
       setOllamaModel((cur) => (res.models.includes(cur) ? cur : res.models[0] ?? ''));
     });
   }, []);
+  useEffect(() => refreshOllama(), [refreshOllama]);
 
   useEffect(() => {
-    savePref('transcribeOptions', { transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review });
-  }, [transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review]);
+    savePref('transcribeOptions', { jobMode, existingSrcLang, transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review });
+  }, [jobMode, existingSrcLang, transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review]);
+
+  // Throws a `cancelled` error when the user pressed Cancel or the step reports it was cancelled
+  const checkCancelled = (res) => {
+    if (cancelRef.current || res?.cancelled) throw Object.assign(new Error(t('jobCancelled', uiLang)), { cancelled: true });
+  };
+
+  // While a job runs: stop it (the dialog stays open so it can be started again). Otherwise: close the dialog.
+  const handleCancel = () => {
+    if (!running) {
+      setShowAutoPanel(false);
+      return;
+    }
+    if (cancelRef.current) return; // second click while cancelling
+    cancelRef.current = true;
+    setCancelling(true);
+    window.electron.cancelJob?.().catch((err) => console.warn('cancelJob failed:', err));
+  };
+
+  // Shared by both modes: running/cancel state, and "Cancelled" vs a real error
+  const runJob = async (work) => {
+    cancelRef.current = false; // a cancel from an earlier run never carries over
+    setCancelling(false);
+    setRunning(true);
+    try {
+      await work();
+    } catch (err) {
+      if (err.cancelled) addToast(t('jobCancelled', uiLang), 'info');
+      else addToast(`${t('error', uiLang)}: ${err.message}`, 'error');
+    } finally {
+      cancelRef.current = false;
+      setCancelling(false);
+      setRunning(false);
+    }
+  };
+
+  // Translate the subtitles already on the timeline: only their text changes, timing and style stay
+  const handleTranslateExisting = () => runJob(async () => {
+    const source = useStore.getState().subtitles
+      .filter((s) => s.text && s.text.trim())
+      .map((s) => ({ id: s.id, startTime: s.startTime, endTime: s.endTime, text: s.text }));
+    if (!source.length) throw new Error(t('translateExistingEmpty', uiLang));
+
+    setStep(t('stepTranslateExisting', uiLang));
+    setProgress({ message: t('preparingTranslate', uiLang), percent: 0 });
+    const res = await window.electron.translateSubtitles({
+      subtitles: source,
+      sourceLang: existingSrcLang,
+      targetLang,
+      engine,
+      ollamaModel,
+      outputMode,
+      review,
+    });
+    checkCancelled(res);
+    if (!res.success) throw new Error(errorMessage(res, uiLang));
+
+    // The service falls back to the source text for a line it could not translate (e.g. Ollama failing
+    // throughout) and still reports success; only lines whose translation differs from the source count.
+    // Bilingual output is "<source>\n<translation>", so an untranslated line ends with "\n<original>".
+    const original = new Map(source.map((s) => [s.id, s.text]));
+    const translatedLine = (s) => {
+      const orig = original.get(s.id);
+      if (typeof s.text !== 'string' || s.text === orig) return false;
+      return !(outputMode === 'bilingual' && s.text.endsWith(`\n${orig}`));
+    };
+    const changed = new Map(res.subtitles.filter(translatedLine).map((s) => [s.id, s.text]));
+    if (changed.size === 0) throw new Error(t('translateNothing', uiLang)); // timeline left as it was
+
+    // Untranslated lines keep their text (no "original\noriginal" in bilingual mode)
+    useStore.getState().setSubtitleTexts(changed);
+    if (changed.size < source.length) {
+      addToast(t('translatePartial', uiLang).replace('{done}', () => changed.size).replace('{total}', () => source.length), 'warning');
+    } else {
+      addToast(`${t('translateExistingDone', uiLang)} ${changed.size}`, 'success');
+    }
+    setShowAutoPanel(false);
+  });
 
   const handleStart = async () => {
+    if (translateExisting) return handleTranslateExisting();
     if (!videoPath) return;
     if (transcribeMode === 'cloud' && !apiKey.trim()) {
       addToast(t('needApiKey', uiLang), 'error');
       return;
     }
 
-    setRunning(true);
-    try {
+    await runJob(async () => {
       // Step 1: Extract audio + transcribe
       setStep(`${t('step', uiLang)} 1/${totalSteps} · ${t('stepTranscribe', uiLang)}`);
       setProgress({ message: t('extractingAudio', uiLang), percent: 2 });
 
       const audioResult = await window.electron.extractAudio(videoPath);
-      if (!audioResult.success) throw new Error(audioResult.error);
+      checkCancelled(audioResult);
+      if (!audioResult.success) throw new Error(errorMessage(audioResult, uiLang));
 
       let result = transcribeMode === 'cloud'
         ? await window.electron.transcribeApi({ audioPath: audioResult.audioPath, apiKey: apiKey.trim(), language: subLang })
         : await window.electron.transcribeLocal({ audioPath: audioResult.audioPath, modelSize, language: subLang, includeVocals });
-      if (!result.success) throw new Error(result.error);
+      checkCancelled(result);
+      if (!result.success) throw new Error(errorMessage(result, uiLang));
       if (!result.subtitles.length) throw new Error(t('noSpeech', uiLang));
 
       // Generated lines use the font / style the user last set
@@ -112,19 +208,17 @@ export default function AutoTranscribe({ addToast }) {
           outputMode,
           review,
         });
+        // Cancel means cancel: nothing from this run is written to the timeline
+        checkCancelled(translated);
         // A failed translation must not throw away a finished transcription
         if (translated.success) subtitles = translated.subtitles;
-        else addToast(`${t('translateFailed', uiLang)} ${translated.error}`, 'error');
+        else addToast(`${t('translateFailed', uiLang)} ${errorMessage(translated, uiLang)}`, 'error');
       }
 
       setSubtitles(subtitles);
       addToast(`${t('transcribeDone', uiLang)} ${subtitles.length}`, 'success');
       setShowAutoPanel(false);
-    } catch (err) {
-      addToast(`${t('error', uiLang)}: ${err.message}`, 'error');
-    } finally {
-      setRunning(false);
-    }
+    });
   };
 
   return (
@@ -133,8 +227,8 @@ export default function AutoTranscribe({ addToast }) {
 
         <div className="at-header">
           <div>
-            <div className="at-title">{t('transcribeTitle', uiLang)}</div>
-            <div className="at-subtitle">{t('transcribeSubtitle', uiLang)}</div>
+            <div className="at-title">{t(translateExisting ? 'translateExistingTitle' : 'transcribeTitle', uiLang)}</div>
+            <div className="at-subtitle">{t(translateExisting ? 'translateExistingSubtitle' : 'transcribeSubtitle', uiLang)}</div>
           </div>
           <button
             className="titlebar-btn"
@@ -146,7 +240,28 @@ export default function AutoTranscribe({ addToast }) {
           </button>
         </div>
 
+        {/* What to do: recognise speech in the video, or translate the subtitles already on the timeline */}
+        <div className="segmented-btn-group at-seg at-job-mode">
+          <button
+            className={`seg-btn${!translateExisting ? ' active' : ''}`}
+            id="tab-job-transcribe"
+            onClick={() => setJobMode('transcribe')}
+            disabled={blocked}
+          >
+            🎙 {t('jobModeTranscribe', uiLang)}
+          </button>
+          <button
+            className={`seg-btn${translateExisting ? ' active' : ''}`}
+            id="tab-job-translate"
+            onClick={() => setJobMode('translate')}
+            disabled={blocked}
+          >
+            🌐 {t('jobModeTranslate', uiLang)}
+          </button>
+        </div>
+
         {/* Step 1 — speech recognition */}
+        {!translateExisting && (
         <section className="at-section">
           <div className="at-section-title"><span className="at-step-num">1</span>{t('stepTranscribe', uiLang)}</div>
 
@@ -237,25 +352,71 @@ export default function AutoTranscribe({ addToast }) {
             {transcribeMode === 'local' ? t('localNote', uiLang) : t('cloudNote', uiLang)}
           </div>
         </section>
+        )}
 
-        {/* Step 2 — translation */}
+        {/* Step 2 — translation (the only step when translating the timeline's subtitles) */}
         <section className="at-section">
-          <div className="at-section-title"><span className="at-step-num">2</span>{t('stepTranslate', uiLang)}</div>
+          <div className="at-section-title">
+            {!translateExisting && <span className="at-step-num">2</span>}
+            {t(translateExisting ? 'stepTranslateExisting' : 'stepTranslate', uiLang)}
+          </div>
 
-          <label className="at-field">
-            <span className="at-label">{t('translateTo', uiLang)}</span>
-            <select
-              className="studio-select"
-              id="select-target-lang"
-              value={targetLang}
-              onChange={(e) => setTargetLang(e.target.value)}
-              disabled={blocked}
-            >
-              {TARGET_LANGS.map((l) => (
-                <option key={l.code} value={l.code}>{t(l.labelKey, uiLang)}</option>
-              ))}
-            </select>
-          </label>
+          {translateExisting ? (
+            <>
+              <div className="at-hint">
+                {textLines > 0
+                  ? `${t('translateExistingCount', uiLang)} ${textLines}`
+                  : t('translateExistingEmpty', uiLang)}
+              </div>
+              <div className="at-grid">
+                <label className="at-field">
+                  <span className="at-label">{t('subtitleLanguage', uiLang)}</span>
+                  <select
+                    className="studio-select"
+                    id="select-existing-src-lang"
+                    value={existingSrcLang}
+                    onChange={(e) => setExistingSrcLang(e.target.value)}
+                    disabled={blocked}
+                  >
+                    {SOURCE_LANGS.filter((l) => l.code !== 'auto').map((l) => (
+                      <option key={l.code} value={l.code}>{t(l.labelKey, uiLang)}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="at-field">
+                  <span className="at-label">{t('translateTo', uiLang)}</span>
+                  <select
+                    className="studio-select"
+                    id="select-target-lang"
+                    value={targetLang}
+                    onChange={(e) => setTargetLang(e.target.value)}
+                    disabled={blocked}
+                  >
+                    {!translating && <option value="none" disabled>{t('chooseLanguage', uiLang)}</option>}
+                    {TARGET_LANGS.filter((l) => l.code !== 'none').map((l) => (
+                      <option key={l.code} value={l.code}>{t(l.labelKey, uiLang)}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              {existingBlocker && textLines > 0 && <div className="at-error">{existingBlocker}</div>}
+            </>
+          ) : (
+            <label className="at-field">
+              <span className="at-label">{t('translateTo', uiLang)}</span>
+              <select
+                className="studio-select"
+                id="select-target-lang"
+                value={targetLang}
+                onChange={(e) => setTargetLang(e.target.value)}
+                disabled={blocked}
+              >
+                {TARGET_LANGS.map((l) => (
+                  <option key={l.code} value={l.code}>{t(l.labelKey, uiLang)}</option>
+                ))}
+              </select>
+            </label>
+          )}
 
           {translating && (
             <>
@@ -331,7 +492,8 @@ export default function AutoTranscribe({ addToast }) {
                   setStatus={setOllama}
                   model={ollamaModel}
                   setModel={setOllamaModel}
-                  disabled={running}
+                  // Locked while a cache delete runs: the installer is written into ~/.kathsub/downloads
+                  disabled={running || cacheBusy}
                   onBusyChange={setSetupBusy}
                 />
               )}
@@ -339,11 +501,20 @@ export default function AutoTranscribe({ addToast }) {
           )}
         </section>
 
+        {/* Downloaded models: size and delete (locked while a job runs) */}
+        <ModelCache
+          uiLang={uiLang}
+          disabled={running || setupBusy}
+          addToast={addToast}
+          onBusyChange={setCacheBusy}
+          onOllamaChanged={refreshOllama}
+        />
+
         {/* Progress */}
         {running && (
           <div className="at-progress">
             <div className="at-progress-step">{step}</div>
-            <div className="at-progress-label">{progress.message}</div>
+            <div className="at-progress-label">{cancelling ? t('cancelling', uiLang) : progress.message}</div>
             <div className="tb-prog-outer at-progress-bar">
               <div className="tb-prog-inner" style={{ width: `${progress.percent}%` }} />
             </div>
@@ -355,10 +526,11 @@ export default function AutoTranscribe({ addToast }) {
           <button
             className="btn btn-ghost"
             id="btn-cancel-transcribe"
-            onClick={() => setShowAutoPanel(false)}
-            disabled={blocked}
+            onClick={handleCancel}
+            // Running: stops the job. Ollama setup downloads keep their own cancel button.
+            disabled={running ? cancelling : setupBusy || cacheBusy}
           >
-            {t('cancel', uiLang)}
+            {cancelling ? t('cancelling', uiLang) : t('cancel', uiLang)}
           </button>
           <button
             className="btn btn-primary at-start"
@@ -368,7 +540,9 @@ export default function AutoTranscribe({ addToast }) {
           >
             {running
               ? '⏳ ' + t('processing', uiLang)
-              : '🎙 ' + t(translating ? 'startTranscribeTranslate' : 'startTranscribe', uiLang)}
+              : translateExisting
+                ? '🌐 ' + t('startTranslateExisting', uiLang)
+                : '🎙 ' + t(translating ? 'startTranscribeTranslate' : 'startTranscribe', uiLang)}
           </button>
         </div>
       </div>

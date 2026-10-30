@@ -4,16 +4,20 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
+const { throwIfCancelled } = require('./jobs');
+
 const CACHE_DIR = path.join(os.homedir(), '.kathsub', 'models');
 
 // Stream model files to disk ourselves: Hugging Face serves big files without content-length and
 // transformers.js then buffers the whole file (645 MB for the turbo encoder) in memory, which crashed the app.
-async function ensureModelFiles(repo, files, onProgress) {
+// `signal` (optional) stops a download in progress when the user cancels the job; the .part file is removed.
+async function ensureModelFiles(repo, files, onProgress, { signal } = {}) {
   for (const file of files) {
+    throwIfCancelled(signal);
     const dest = path.join(CACHE_DIR, repo, file);
     if (fs.existsSync(dest)) continue;
 
-    const res = await fetch(`https://huggingface.co/${repo}/resolve/main/${file}`);
+    const res = await fetch(`https://huggingface.co/${repo}/resolve/main/${file}`, { signal });
     if (!res.ok) throw new Error(`Không tải được ${repo}/${file} (HTTP ${res.status})`);
     const total = Number(res.headers.get('content-length')) || 0;
 
@@ -35,6 +39,7 @@ async function ensureModelFiles(repo, files, onProgress) {
     } catch (err) {
       out.destroy();
       fs.rmSync(tmp, { force: true });
+      throwIfCancelled(signal); // an aborted download is a cancellation, not a network error
       throw err;
     }
     fs.renameSync(tmp, dest); // only complete files ever get the real name

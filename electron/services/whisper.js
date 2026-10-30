@@ -82,8 +82,9 @@ function buildSubtitles(segments) {
 
 // ─── Cloud: OpenAI Whisper API ────────────────────────────────────────────────
 
-async function transcribeWithAPI(audioPath, apiKey, language, onProgress) {
+async function transcribeWithAPI(audioPath, apiKey, language, onProgress, { signal } = {}) {
   try {
+    throwIfCancelled(signal);
     const fs = require('fs');
     onProgress?.({ status: 'uploading', message: 'Đang gửi audio lên Whisper API...', percent: 10 });
 
@@ -98,7 +99,8 @@ async function transcribeWithAPI(audioPath, apiKey, language, onProgress) {
       language: language && language !== 'auto' ? language : undefined,
       response_format: 'verbose_json',
       timestamp_granularities: ['segment'],
-    });
+    }, { signal });
+    throwIfCancelled(signal);
 
     onProgress?.({ status: 'processing', message: 'Đang xử lý kết quả...', percent: 90 });
 
@@ -112,6 +114,7 @@ async function transcribeWithAPI(audioPath, apiKey, language, onProgress) {
     onProgress?.({ status: 'done', message: 'Hoàn thành!', percent: 100 });
     return { success: true, subtitles };
   } catch (err) {
+    if (signal?.aborted) return { ...CANCELLED_RESULT };
     return { success: false, error: err.message };
   }
 }
@@ -124,6 +127,7 @@ const path = require('path');
 const zlib = require('zlib');
 const vad = require('./vad');
 const { CACHE_DIR, ensureModelFiles, downloadMessage } = require('./models');
+const { throwIfCancelled, CANCELLED_RESULT } = require('./jobs');
 
 const SR = 16000;
 
@@ -260,8 +264,11 @@ function splitUtterances(seg, speech, lang) {
 }
 
 // includeVocals: also subtitle moans, shouts and breathing that are not speech ("イク", "あっ")
-async function transcribeLocal(audioPath, modelSize = 'small', language, onProgress, { includeVocals = false } = {}) {
+// signal: the job's AbortSignal, checked between steps and between chunks (a chunk already being decoded finishes first)
+async function transcribeLocal(audioPath, modelSize = 'small', language, onProgress, { includeVocals = false, signal } = {}) {
+  const check = () => throwIfCancelled(signal);
   try {
+    check();
     const repo = MODEL_REPOS[modelSize] ?? MODEL_REPOS.small;
 
     onProgress?.({ status: 'loading', message: `Đang chuẩn bị model Whisper ${modelSize}...`, percent: 3 });
@@ -271,8 +278,9 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
         message: downloadMessage(`model ${modelSize}`, file, loaded, total),
         percent: Math.round(3 + (total ? loaded / total : 0) * 40),
       });
-    });
-    await ensureModelFiles(VAD_REPO, [VAD_FILE]);
+    }, { signal });
+    await ensureModelFiles(VAD_REPO, [VAD_FILE], undefined, { signal });
+    check();
 
     // Rebuild the pipeline when the user picks a different model size
     if (localPipeline && localModelSize !== modelSize) {
@@ -295,13 +303,16 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
       });
       localModelSize = modelSize;
     }
+    check(); // the loaded model stays cached for the next run
 
     const audio = readWavAsFloat32(audioPath);
 
     onProgress?.({ status: 'vad', message: 'Đang tìm các đoạn có giọng nói...', percent: 50 });
-    const probs = await vad.speechProbs(audio, path.join(CACHE_DIR, VAD_REPO, VAD_FILE), (f) =>
-      onProgress?.({ status: 'vad', message: `Đang tìm các đoạn có giọng nói... ${Math.round(f * 100)}%`, percent: Math.round(50 + f * 6) }),
-    );
+    const probs = await vad.speechProbs(audio, path.join(CACHE_DIR, VAD_REPO, VAD_FILE), (f) => {
+      check(); // called every ~64 s of audio; the throw ends the VAD loop
+      onProgress?.({ status: 'vad', message: `Đang tìm các đoạn có giọng nói... ${Math.round(f * 100)}%`, percent: Math.round(50 + f * 6) });
+    });
+    check();
     const speech = vad.speechRegions(probs);
     const chunks = vad.groupChunks(speech, probs, MAX_CHUNK_S);
     if (includeVocals) {
@@ -322,6 +333,7 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
 
     const segments = [];
     for (let i = 0; i < chunks.length; i++) {
+      check();
       onProgress?.({
         status: 'transcribing',
         message: `Đang nhận dạng giọng nói... ${Math.round((i / chunks.length) * 100)}%`,
@@ -335,6 +347,7 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
         }
         // One text stuck over a long stretch (often moans or music): redo it in short pieces cut at pauses
         for (const piece of vad.groupChunks([{ start: seg.startTime, end: seg.endTime }], probs, 6)) {
+          check();
           segments.push(...(await transcribeSpan(localPipeline, audio, piece.start, piece.end, lang)));
         }
       }
@@ -345,6 +358,8 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
     onProgress?.({ status: 'done', message: 'Hoàn thành!', percent: 100 });
     return { success: true, subtitles, language: lang };
   } catch (err) {
+    // Cancelled by the user: keep the loaded model for the next run
+    if (signal?.aborted) return { ...CANCELLED_RESULT };
     // Reset pipeline so next call tries again fresh
     localPipeline = null;
     localModelSize = null;
@@ -352,4 +367,18 @@ async function transcribeLocal(audioPath, modelSize = 'small', language, onProgr
   }
 }
 
-module.exports = { transcribeWithAPI, transcribeLocal };
+// Drop the cached Whisper pipeline and VAD session (after their files were deleted from the cache),
+// so the next run downloads and loads them again instead of using stale objects
+async function resetModels() {
+  const pipe = localPipeline;
+  localPipeline = null;
+  localModelSize = null;
+  try {
+    await pipe?.dispose?.();
+  } catch (err) {
+    console.warn('[Whisper] Failed to dispose model:', err.message);
+  }
+  await vad.reset();
+}
+
+module.exports = { transcribeWithAPI, transcribeLocal, resetModels, MODEL_REPOS, VAD_REPO };

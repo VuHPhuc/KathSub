@@ -223,6 +223,26 @@ ipcMain.handle('open-video', async (event) => {
   }
 });
 
+// Pick a subtitle file and return its decoded text; the renderer parses it (src/utils/subtitleParser.js)
+ipcMain.handle('import-subtitle', async (event) => {
+  try {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showOpenDialog(win, {
+      title: 'Nhập file phụ đề',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Phụ đề (SRT, VTT, ASS, SSA)', extensions: ['srt', 'vtt', 'ass', 'ssa'] },
+        { name: 'Tất cả file', extensions: ['*'] },
+      ],
+    });
+    if (result.canceled || result.filePaths.length === 0) return { success: false, canceled: true };
+    return await require('./services/subtitleFile').readSubtitleFile(result.filePaths[0]);
+  } catch (err) {
+    console.error('[import-subtitle] Error:', err);
+    return { success: false, code: 'read', detail: err.code || err.message, error: err.message };
+  }
+});
+
 ipcMain.handle('save-subtitle-file', async (event, defaultName) => {
   try {
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -268,9 +288,43 @@ try {
   console.error('[FFmpeg] Failed to load service:', err.message);
 }
 
+// ─── Cancellable jobs (extract audio → transcribe → translate) ───────────────
+// Each step is its own IPC call with a fresh AbortController, so a cancel never leaks into the next job.
+// 'cancel-job' aborts the step in flight; the renderer also stops before starting the next step.
+
+let currentJob = null;   // AbortController of the step running now
+let pendingAudio = null; // WAV extracted but not yet handed to a transcribe call
+
+async function runJob(fn) {
+  // Model files may be half-deleted right now (see model-cache-delete)
+  if (cacheDeleting) return { ...CACHE_DELETING };
+  const ac = new AbortController();
+  currentJob = ac;
+  try {
+    return await fn(ac.signal);
+  } finally {
+    if (currentJob === ac) currentJob = null;
+  }
+}
+
+ipcMain.handle('cancel-job', async () => {
+  const wasRunning = !!currentJob;
+  currentJob?.abort();
+  // Cancelled between "extract" and "transcribe": the WAV would never be used or deleted
+  if (pendingAudio) {
+    removeTempAudio(pendingAudio);
+    pendingAudio = null;
+  }
+  return { success: true, wasRunning };
+});
+
 ipcMain.handle('extract-audio', async (event, videoPath) => {
   if (!ffmpegService) return { success: false, error: 'FFmpeg service not available' };
-  return ffmpegService.extractAudio(videoPath);
+  return runJob(async (signal) => {
+    const result = await ffmpegService.extractAudio(videoPath, { signal });
+    if (result.success) pendingAudio = result.audioPath;
+    return result;
+  });
 });
 
 ipcMain.handle('export-subtitle', async (event, { subtitles, outputPath, format }) => {
@@ -314,19 +368,28 @@ function removeTempAudio(audioPath) {
   });
 }
 
+// The transcribe call now owns the WAV (and deletes it when done)
+function takeAudio(audioPath) {
+  if (pendingAudio === audioPath) pendingAudio = null;
+}
+
 ipcMain.handle('transcribe-api', async (event, { audioPath, apiKey, language }) => {
+  takeAudio(audioPath);
   if (!whisperService) return { success: false, error: 'Whisper service not available' };
   try {
-    return await whisperService.transcribeWithAPI(audioPath, apiKey, language, (p) => sendTranscribeProgress(event, p));
+    return await runJob((signal) =>
+      whisperService.transcribeWithAPI(audioPath, apiKey, language, (p) => sendTranscribeProgress(event, p), { signal }));
   } finally {
     removeTempAudio(audioPath);
   }
 });
 
 ipcMain.handle('transcribe-local', async (event, { audioPath, modelSize, language, includeVocals }) => {
+  takeAudio(audioPath);
   if (!whisperService) return { success: false, error: 'Whisper service not available' };
   try {
-    return await whisperService.transcribeLocal(audioPath, modelSize, language, (p) => sendTranscribeProgress(event, p), { includeVocals });
+    return await runJob((signal) =>
+      whisperService.transcribeLocal(audioPath, modelSize, language, (p) => sendTranscribeProgress(event, p), { includeVocals, signal }));
   } finally {
     removeTempAudio(audioPath);
   }
@@ -343,7 +406,7 @@ try {
 
 ipcMain.handle('translate-subtitles', async (event, data) => {
   if (!translateService) return { success: false, error: 'Translate service not available' };
-  return translateService.translateSubtitles(data, (p) => sendTranscribeProgress(event, p));
+  return runJob((signal) => translateService.translateSubtitles(data, (p) => sendTranscribeProgress(event, p), { signal }));
 });
 
 // ─── Ollama setup ────────────────────────────────────────────────────────────
@@ -370,6 +433,8 @@ ipcMain.handle('ollama-status', async () => {
 
 ipcMain.handle('ollama-install', async (event) => {
   if (!ollamaService) return OLLAMA_UNAVAILABLE;
+  // The installer is written to DOWNLOAD_DIR, which a cache delete may be removing right now
+  if (cacheDeleting) return { ...CACHE_DELETING };
   return ollamaService.installOllama((p) => sendOllamaProgress(event, p));
 });
 
@@ -380,12 +445,68 @@ ipcMain.handle('ollama-start', async () => {
 
 ipcMain.handle('ollama-pull', async (event, model) => {
   if (!ollamaService) return OLLAMA_UNAVAILABLE;
+  if (cacheDeleting) return { ...CACHE_DELETING }; // an Ollama model may be being deleted
   return ollamaService.pullModel(model, (p) => sendOllamaProgress(event, p));
 });
 
 ipcMain.handle('ollama-cancel', async () => {
   ollamaService?.cancelDownload();
   return true;
+});
+
+// ─── Model cache (downloaded Whisper / VAD / NLLB models, Ollama models) ─────
+
+let cacheService = null;
+try {
+  cacheService = require('./services/cache');
+} catch (err) {
+  console.error('[Cache] Failed to load service:', err.message);
+}
+
+let cacheDeleting = false;
+// Never delete files a running job (or the Ollama installer download) is reading or writing
+const jobBusy = () => !!currentJob || !!ollamaService?.isDownloading?.();
+// Errors carry a `code`; the renderer shows the text for it in the UI language (src/locales errorMessage)
+const CACHE_UNAVAILABLE = { success: false, code: 'unavailable', error: 'Cache service not available' };
+const CACHE_BUSY = { success: false, code: 'busy', error: 'A job is running' };
+const CACHE_DELETING = { success: false, code: 'cacheDeleting', error: 'Model cache is being deleted' };
+
+ipcMain.handle('model-cache-info', async () => {
+  if (!cacheService) return CACHE_UNAVAILABLE;
+  try {
+    const info = await cacheService.getCacheInfo();
+    return { ...info, ollama: await cacheService.listOllamaModels(), busy: jobBusy() };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// key: a group key from model-cache-info ('whisper:small', 'nllb', 'downloads', ...) or 'all' — never a path
+ipcMain.handle('model-cache-delete', async (event, key) => {
+  if (!cacheService) return CACHE_UNAVAILABLE;
+  if (typeof key !== 'string') return { success: false, code: 'invalidKey', error: 'Invalid key' };
+  if (cacheDeleting) return CACHE_DELETING;
+  if (jobBusy()) return CACHE_BUSY;
+  cacheDeleting = true;
+  try {
+    return await cacheService.deleteCacheGroup(key);
+  } catch (err) {
+    return { success: false, error: err.message };
+  } finally {
+    cacheDeleting = false;
+  }
+});
+
+ipcMain.handle('ollama-delete-model', async (event, name) => {
+  if (!cacheService) return CACHE_UNAVAILABLE;
+  if (cacheDeleting) return CACHE_DELETING;
+  if (jobBusy()) return CACHE_BUSY;
+  cacheDeleting = true;
+  try {
+    return await cacheService.deleteOllamaModel(name);
+  } finally {
+    cacheDeleting = false;
+  }
 });
 
 // ─── App updates ─────────────────────────────────────────────────────────────

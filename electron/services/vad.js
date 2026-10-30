@@ -195,4 +195,15 @@ function loudRegions(audio, speech, { minVoicedS = 0.15, mergeGapS = 0.4, voiced
     }, []);
 }
 
-module.exports = { speechProbs, speechRegions, groupChunks, loudRegions, SR, WINDOW };
+// Release the cached session (its model file was deleted); the next speechProbs call loads it again
+async function reset() {
+  const sess = session;
+  session = null;
+  try {
+    await sess?.release?.();
+  } catch (err) {
+    console.warn('[VAD] Failed to release session:', err.message);
+  }
+}
+
+module.exports = { speechProbs, speechRegions, groupChunks, loudRegions, reset, SR, WINDOW };

@@ -198,4 +198,7 @@ function cancelDownload() {
   activeDownload?.abort();
 }
 
-module.exports = { getStatus, installOllama, startOllama, pullModel, cancelDownload, checkSignature };
+// The model-cache manager must not delete DOWNLOAD_DIR while the installer is being written there
+const isDownloading = () => !!activeDownload;
+
+module.exports = { getStatus, installOllama, startOllama, pullModel, cancelDownload, checkSignature, isDownloading, DOWNLOAD_DIR };

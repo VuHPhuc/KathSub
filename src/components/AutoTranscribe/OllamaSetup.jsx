@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { t } from '../../locales';
+import { t, errorMessage } from '../../locales';
 
 const RECOMMENDED_MODELS = [
   { name: 'qwen3:4b',   labelKey: 'ollamaModelSmall' },
@@ -60,7 +60,7 @@ export default function OllamaSetup({ uiLang, status, setStatus, model, setModel
     setBusy(kind);
     setProgress({ percent: 0, message: '' });
     const res = await action();
-    if (!res.success) setError(res.error);
+    if (!res.success) setError(errorMessage(res, uiLang));
     setBusy(null);
     return res;
   };

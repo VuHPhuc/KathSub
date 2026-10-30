@@ -4,6 +4,7 @@
 //   ollama — any local LLM served by Ollama (reads the whole transcript first, translates with context)
 
 const { CACHE_DIR, ensureModelFiles, downloadMessage } = require('./models');
+const { cancelledError, throwIfCancelled, CANCELLED_RESULT } = require('./jobs');
 
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 const NLLB_MODEL = 'Xenova/nllb-200-distilled-600M';
@@ -42,6 +43,28 @@ const NLLB_FILES = [
 
 let nllbPipeline = null; // cached translation pipeline
 
+// NLLB loops on short moans and cries ("あっ…そこ、だめぇ…" → "Không, không, không, …" up to its max_length of 200
+// tokens, ~10 s per line). Generation options as read by transformers.js 3.8.1 (models.js generate /
+// _get_logits_processor): max_new_tokens caps the output by the input length; no_repeat_ngram_size bans any token
+// trigram from coming back. repetition_penalty is not used: NLLB's decoder starts with </s> (decoder_start_token_id =
+// eos_token_id = 2), so it would also push down the end token and keep short lines from stopping.
+// num_beams is not used either: this version's generate() does not spawn beams.
+const NLLB_MAX_NEW_TOKENS = 200; // the model's own max_length
+function nllbBounds(srcTokens) {
+  return {
+    max_new_tokens: Math.min(NLLB_MAX_NEW_TOKENS, Math.ceil(srcTokens * 2.5) + 10),
+    no_repeat_ngram_size: 3,
+  };
+}
+
+// Safety net if a loop still gets through: a run of 4+ copies of the same phrase (case-insensitive) keeps 2.
+// Only phrases with a letter, so numbers such as 1000000 stay intact.
+function collapseLoops(text) {
+  return text
+    .replace(/(.{2,40}?)\1{3,}/gisu, (m, unit) => (/\p{L}/u.test(unit) ? m.slice(0, unit.length * 2) : m))
+    .replace(/[\s,、]+$/u, '');
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // Guess the spoken language from the transcribed text (used when Whisper ran with "auto")
@@ -60,7 +83,7 @@ function mergeText(original, translated, outputMode) {
 
 // ─── NLLB (offline, built in) ────────────────────────────────────────────────
 
-async function translateWithNllb(texts, srcLang, tgtLang, onProgress) {
+async function translateWithNllb(texts, srcLang, tgtLang, onProgress, signal) {
   if (!nllbPipeline) {
     onProgress?.({ status: 'loading', message: 'Đang chuẩn bị model dịch NLLB (lần đầu ~900 MB)...', percent: 0 });
     await ensureModelFiles(NLLB_MODEL, NLLB_FILES, (file, loaded, total) => {
@@ -69,7 +92,8 @@ async function translateWithNllb(texts, srcLang, tgtLang, onProgress) {
         message: downloadMessage('model dịch NLLB', file, loaded, total),
         percent: total ? Math.round((loaded / total) * 100) : 0,
       });
-    });
+    }, { signal });
+    throwIfCancelled(signal);
 
     const { pipeline, env } = await import('@huggingface/transformers');
     env.cacheDir = CACHE_DIR;
@@ -79,11 +103,13 @@ async function translateWithNllb(texts, srcLang, tgtLang, onProgress) {
 
   const results = [];
   for (let i = 0; i < texts.length; i++) {
+    throwIfCancelled(signal); // between lines; a line being translated finishes first
     const out = await nllbPipeline(texts[i], {
       src_lang: NLLB_CODES[srcLang],
       tgt_lang: NLLB_CODES[tgtLang],
+      ...nllbBounds(nllbPipeline.tokenizer.encode(texts[i]).length),
     });
-    results.push((out?.[0]?.translation_text ?? '').trim());
+    results.push(collapseLoops((out?.[0]?.translation_text ?? '').trim()));
     onProgress?.({ status: 'translating', done: i + 1, total: texts.length });
   }
   return results;
@@ -185,13 +211,17 @@ const IDLE_MS = 120000; // longest wait for the next chunk, the first one includ
 // A timeout is marked: it usually repeats on the same PC, so the brief does not retry it (BUG-18)
 const timeoutError = (msg) => Object.assign(new Error(msg), { timeout: true });
 
-async function ollamaChat(model, system, user, schema, { numCtx = 8192, numPredict = BATCH_PREDICT, idleMs = IDLE_MS, firstMs = idleMs } = {}) {
+// signal: the job's AbortSignal — cancelling aborts the request in flight with a `cancelled` error
+async function ollamaChat(model, system, user, schema, { numCtx = 8192, numPredict = BATCH_PREDICT, idleMs = IDLE_MS, firstMs = idleMs, signal } = {}) {
+  throwIfCancelled(signal);
   const ac = new AbortController();
   let timer;
   const idle = (ms) => {
     clearTimeout(timer);
     timer = setTimeout(() => ac.abort(timeoutError(`Ollama không phản hồi sau ${ms / 1000} s`)), ms);
   };
+  const onCancel = () => ac.abort(cancelledError());
+  signal?.addEventListener('abort', onCancel, { once: true });
   idle(firstMs);
   try {
     const res = await fetch(`${OLLAMA_URL}/api/chat`, {
@@ -252,6 +282,7 @@ async function ollamaChat(model, system, user, schema, { numCtx = 8192, numPredi
     throw err;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onCancel);
   }
 }
 
@@ -351,7 +382,7 @@ function looksUntranslated(translation, source, tgtLang) {
   return ['en', 'vi'].includes(tgtLang) && /[぀-ヿ一-鿿가-힯]/.test(translation);
 }
 
-async function buildBrief(texts, srcName, tgtName, model) {
+async function buildBrief(texts, srcName, tgtName, model, signal) {
   const system =
     `You prepare a translator's brief for ${srcName} subtitles that will be translated into ${tgtName}. ` +
     'The transcript comes from speech recognition, has no speaker labels and may contain mis-heard words. ' +
@@ -367,10 +398,11 @@ async function buildBrief(texts, srcName, tgtName, model) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
       const brief = await ollamaChat(model, system, transcript, BRIEF_SCHEMA,
-        { numCtx: 16384, numPredict: BRIEF_PREDICT, firstMs: BRIEF_FIRST_MS, idleMs: BRIEF_IDLE_MS });
+        { numCtx: 16384, numPredict: BRIEF_PREDICT, firstMs: BRIEF_FIRST_MS, idleMs: BRIEF_IDLE_MS, signal });
       if (typeof brief?.intimate === 'boolean') return brief;
       throw new Error('brief thiếu trường "intimate"');
     } catch (err) {
+      if (err.cancelled) throw err;
       // The brief only improves quality; translate without it rather than fail
       console.warn(`[Translate] Could not build translator brief (attempt ${attempt}/2):`, err.message);
       if (err.timeout) break;
@@ -396,12 +428,12 @@ function briefText(brief) {
     `\nIntimate scene: ${brief.intimate ? 'yes' : 'no'}`;
 }
 
-async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, { review = false } = {}) {
+async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, { review = false, signal } = {}) {
   const srcName = langName(srcLang);
   const tgtName = langName(tgtLang);
 
   onProgress?.({ status: 'analyzing', message: 'Đang đọc toàn bộ lời thoại để nắm ngữ cảnh...', percent: 0 });
-  const drafted = await buildBrief(texts, srcName, tgtName, model);
+  const drafted = await buildBrief(texts, srcName, tgtName, model, signal);
   // Checked on every line, not just the 400 the brief reads, and ORed in: the model sometimes misses the scene too
   const intimate = !!drafted?.intimate || looksIntimate(texts);
   const brief = drafted ? { ...drafted, intimate } : intimate ? { summary: '(unavailable)', tone: '(unknown)', intimate } : null;
@@ -447,6 +479,7 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, {
           next: texts.slice(end, end + NEXT_LINES).map((_, k) => shown(end + k)),
         }),
       LINES_SCHEMA,
+      { signal },
     );
 
   // A cry line answered with a literal "go" gets one more retry that says what was wrong. The rejected draft
@@ -486,6 +519,7 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, {
     try {
       reply = await ask(ids, start, end);
     } catch (err) {
+      if (err.cancelled) throw err;
       console.warn('[Translate] Ollama batch failed, retrying line by line:', err.message);
     }
     const byId = new Map((reply.lines || []).map((l) => [Number(l.id), l]));
@@ -499,6 +533,7 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, {
           const single = await ask([id], id, id + 1);
           ok = accept(id, single.lines?.[0]);
         } catch (err) {
+          if (err.cancelled) throw err;
           console.warn(`[Translate] Ollama failed on line ${id}:`, err.message);
         }
       }
@@ -509,7 +544,7 @@ async function translateWithOllama(texts, srcLang, tgtLang, model, onProgress, {
     onProgress?.({ status: 'translating', done: end, total: texts.length });
   }
 
-  if (review) await reviewTranslations({ texts, sources, translations, srcName, tgtName, tgtLang, brief, model, onProgress, note, literalGo, shown });
+  if (review) await reviewTranslations({ texts, sources, translations, srcName, tgtName, tgtLang, brief, model, onProgress, note, literalGo, shown, signal });
   return { translations, sources };
 }
 
@@ -533,7 +568,7 @@ const REVIEW_SCHEMA = {
   required: ['lines'],
 };
 
-async function reviewTranslations({ texts, sources, translations, srcName, tgtName, tgtLang, brief, model, onProgress, note = () => ({}), literalGo = () => false, shown = (id, text) => text }) {
+async function reviewTranslations({ texts, sources, translations, srcName, tgtName, tgtLang, brief, model, onProgress, note = () => ({}), literalGo = () => false, shown = (id, text) => text, signal }) {
   const system = [
     `You are a senior ${tgtName} subtitle editor checking a translation from ${srcName}.`,
     '',
@@ -564,8 +599,10 @@ async function reviewTranslations({ texts, sources, translations, srcName, tgtNa
           after: Array.from({ length: Math.min(texts.length, end + REVIEW_CONTEXT) - end }, (_, k) => pair(end + k)),
         }),
         REVIEW_SCHEMA,
+        { signal },
       );
     } catch (err) {
+      if (err.cancelled) throw err;
       // The drafts are already usable; a failed review batch just keeps them
       console.warn('[Translate] Review batch failed, keeping drafts:', err.message);
     }
@@ -582,8 +619,10 @@ async function reviewTranslations({ texts, sources, translations, srcName, tgtNa
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-async function translateSubtitles({ subtitles, sourceLang, targetLang, engine, ollamaModel, outputMode, review }, onProgress) {
+// signal (optional): the job's AbortSignal; a cancelled run returns { cancelled: true } and keeps the loaded NLLB model
+async function translateSubtitles({ subtitles, sourceLang, targetLang, engine, ollamaModel, outputMode, review }, onProgress, { signal } = {}) {
   try {
+    throwIfCancelled(signal);
     const texts = subtitles.map((s) => s.text);
     const src = sourceLang && sourceLang !== 'auto' ? sourceLang : detectLang(texts);
 
@@ -610,19 +649,32 @@ async function translateSubtitles({ subtitles, sourceLang, targetLang, engine, o
     let sources = texts;
     if (engine === 'ollama') {
       if (!ollamaModel) throw new Error('Chưa chọn model Ollama');
-      ({ translations: translated, sources } = await translateWithOllama(texts, src, targetLang, ollamaModel, report, { review }));
+      ({ translations: translated, sources } = await translateWithOllama(texts, src, targetLang, ollamaModel, report, { review, signal }));
     } else {
-      translated = await translateWithNllb(texts, src, targetLang, report);
+      translated = await translateWithNllb(texts, src, targetLang, report, signal);
     }
+    throwIfCancelled(signal);
 
     return {
       success: true,
       subtitles: subtitles.map((s, i) => ({ ...s, text: mergeText(sources[i], translated[i] || s.text, outputMode) })),
     };
   } catch (err) {
+    if (signal?.aborted || err.cancelled) return { ...CANCELLED_RESULT };
     nllbPipeline = null;
     return { success: false, error: err.message };
   }
 }
 
-module.exports = { translateSubtitles, listOllamaModels, detectLang };
+// Drop the cached NLLB pipeline (after its files were deleted from the cache) so the next run loads it again
+async function resetModels() {
+  const pipe = nllbPipeline;
+  nllbPipeline = null;
+  try {
+    await pipe?.dispose?.();
+  } catch (err) {
+    console.warn('[Translate] Failed to dispose NLLB model:', err.message);
+  }
+}
+
+module.exports = { translateSubtitles, listOllamaModels, detectLang, resetModels, NLLB_MODEL, OLLAMA_URL };

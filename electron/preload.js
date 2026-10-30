@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('electron', {
   // File dialogs
   openVideo:        ()     => ipcRenderer.invoke('open-video'),
   saveSubtitleFile: (name) => ipcRenderer.invoke('save-subtitle-file', name),
+  importSubtitle:   ()     => ipcRenderer.invoke('import-subtitle'),
   saveVideoFile:    (name) => ipcRenderer.invoke('save-video-file', name),
 
   // FFmpeg
@@ -36,12 +37,20 @@ contextBridge.exposeInMainWorld('electron', {
   // Translate
   translateSubtitles: (data) => ipcRenderer.invoke('translate-subtitles', data),
 
+  // Stops the running extract / transcribe / translate step
+  cancelJob: () => ipcRenderer.invoke('cancel-job'),
+
   // Ollama setup
   ollamaStatus:  ()      => ipcRenderer.invoke('ollama-status'),
   ollamaInstall: ()      => ipcRenderer.invoke('ollama-install'),
   ollamaStart:   ()      => ipcRenderer.invoke('ollama-start'),
   ollamaPull:    (model) => ipcRenderer.invoke('ollama-pull', model),
   ollamaCancel:  ()      => ipcRenderer.invoke('ollama-cancel'),
+
+  // Model cache (renderer sends group keys / Ollama model names, never paths)
+  modelCacheInfo:    ()      => ipcRenderer.invoke('model-cache-info'),
+  modelCacheDelete:  (key)   => ipcRenderer.invoke('model-cache-delete', key),
+  ollamaDeleteModel: (name)  => ipcRenderer.invoke('ollama-delete-model', name),
 
   // App updates
   updateDownload: () => ipcRenderer.invoke('update-download'),

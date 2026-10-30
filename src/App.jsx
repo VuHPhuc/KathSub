@@ -22,7 +22,8 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
 
   const addToast = useCallback((message, type = 'info') => {
-    const id = Date.now();
+    // Unique even for several toasts in the same millisecond (used as the React key)
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
   }, []);

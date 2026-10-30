@@ -179,6 +179,18 @@ export function IconFileText({ size = 16, strokeWidth = 1.75, color = 'currentCo
   );
 }
 
+// File with an arrow coming in: import a subtitle file
+export function IconFileImport({ size = 16, strokeWidth = 1.75, color = 'currentColor', className = '', ...props }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="12" y1="11" x2="12" y2="18" />
+      <polyline points="9 15 12 18 15 15" />
+    </svg>
+  );
+}
+
 export function IconClose({ size = 14, strokeWidth = 1.75, color = 'currentColor', className = '', ...props }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>

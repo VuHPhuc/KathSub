@@ -1777,3 +1777,56 @@ html, body, #root {
   line-height: 1.5;
   color: var(--danger);
 }
+
+.at-job-mode { align-self: stretch; display: flex; }
+.at-job-mode .seg-btn { flex: 1; }
+/* Expanded sections (model cache, Ollama setup) must not push the buttons off small screens */
+.at-modal { max-height: 94vh; overflow-y: auto; }
+
+/* ─── Model cache manager (inside the transcribe dialog) ─────────────────────── */
+.mc-section { gap: 8px; padding: 10px 14px; }
+.mc-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+.mc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  font-size: 12px;
+}
+.mc-name { flex: 1; min-width: 0; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-size { color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc-status { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.mc-confirm { display: inline-flex; align-items: center; gap: 6px; }
+.mc-btn { padding: 4px 10px; font-size: 11px; }
+.mc-total { border-top: 1px solid var(--border-subtle); padding-top: 6px; font-weight: 600; }
+.mc-subtitle { margin-top: 6px; }
+.mc-path { word-break: break-all; }
+
+/* ─── Subtitle import ────────────────────────────────────────────────────────── */
+.tb-btn-wrap { display: inline-flex; }
+.import-confirm {
+  width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.import-confirm-text {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  word-break: break-word;
+}

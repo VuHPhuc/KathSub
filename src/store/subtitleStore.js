@@ -191,6 +191,12 @@ const useStore = create((set, get) => ({
       selectedId: s.selectedId === id ? null : s.selectedId,
     })),
 
+  // Replace only the text of the given subtitles (Map id → text); timing and style stay as they are
+  setSubtitleTexts: (textsById) =>
+    set((s) => ({
+      subtitles: s.subtitles.map((sub) => (textsById.has(sub.id) ? { ...sub, text: textsById.get(sub.id) } : sub)),
+    })),
+
   setSubtitles: (list) =>
     set({
       subtitles: list.sort((a, b) => a.startTime - b.startTime),

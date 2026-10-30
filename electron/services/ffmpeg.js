@@ -3,6 +3,7 @@ const ffmpegStatic = require('ffmpeg-static');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { CANCELLED_RESULT } = require('./jobs');
 
 // ─── FFmpeg Binary Resolver (Packaged vs Dev) ────────────────────────────────
 function getFfmpegPath() {
@@ -191,23 +192,47 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 // ─── Extract audio for Whisper ───────────────────────────────────────────────
 
-async function extractAudio(videoPath) {
+// `signal` (optional): aborting it kills ffmpeg and resolves { cancelled: true } (the user pressed Cancel)
+async function extractAudio(videoPath, { signal } = {}) {
   const outputPath = path.join(os.tmpdir(), `kathsub_audio_${Date.now()}.wav`);
 
   // Always resolve: a rejected IPC promise left the transcribe dialog stuck in "processing"
   return new Promise((resolve) => {
-    ffmpeg(videoPath)
+    if (signal?.aborted) return resolve({ ...CANCELLED_RESULT });
+
+    const cmd = ffmpeg(videoPath)
       .noVideo()
       .audioFrequency(16000)
       .audioChannels(1)
       .audioCodec('pcm_s16le')
-      .output(outputPath)
-      .on('end', () => resolve({ success: true, audioPath: outputPath }))
+      .output(outputPath);
+    const onAbort = () => {
+      try {
+        cmd.kill('SIGKILL');
+      } catch (_) {}
+    };
+    const finish = (result) => {
+      signal?.removeEventListener('abort', onAbort);
+      activeCommands.delete(cmd);
+      resolve(result);
+    };
+
+    cmd
+      .on('end', () => {
+        // Finished in the same moment the user cancelled: nobody will use the WAV
+        if (signal?.aborted) {
+          tryUnlink(outputPath);
+          return finish({ ...CANCELLED_RESULT });
+        }
+        finish({ success: true, audioPath: outputPath });
+      })
       .on('error', (err) => {
         tryUnlink(outputPath);
-        resolve({ success: false, error: err.message });
-      })
-      .run();
+        finish(signal?.aborted ? { ...CANCELLED_RESULT } : { success: false, error: err.message });
+      });
+    signal?.addEventListener('abort', onAbort, { once: true });
+    activeCommands.add(cmd); // also killed by cancelAll() when the app quits
+    cmd.run();
   });
 }
 
