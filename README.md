@@ -20,8 +20,8 @@ Bạn có thể tải các bản phát hành chính thức trực tiếp tại m
 
 | Tên tệp | Loại | Mô tả |
 | :--- | :---: | :--- |
-| [**KathSub-Setup-1.4.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bộ cài đặt (Installer)** | Tự động cài đặt vào máy, tạo biểu tượng ngoài màn hình Desktop và menu Start. Khuyên dùng cho người dùng phổ thông. |
-| [**KathSub Portable 1.4.0.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bản Portable (Chạy ngay)** | Chỉ cần nhấp đúp là mở phần mềm ngay, không cần cài đặt, có thể chép vào USB mang đi mọi nơi. |
+| [**KathSub-Setup-1.4.1.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bộ cài đặt (Installer)** | Tự động cài đặt vào máy, tạo biểu tượng ngoài màn hình Desktop và menu Start. Khuyên dùng cho người dùng phổ thông. |
+| [**KathSub Portable 1.4.1.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bản Portable (Chạy ngay)** | Chỉ cần nhấp đúp là mở phần mềm ngay, không cần cài đặt, có thể chép vào USB mang đi mọi nơi. |
 
 > **Lưu ý trên máy tính cục bộ:** Các file `.exe` cài đặt cũng đã được đóng gói sẵn trong thư mục cục bộ tại:  
 > `d:\code\KathSub\release\`
@@ -53,7 +53,7 @@ Bạn có thể tải các bản phát hành chính thức trực tiếp tại m
 - Hỗ trợ đa dạng ngôn ngữ: **Tiếng Việt (`vi`)**, **Tiếng Anh (`en`)**, **Tiếng Nhật (`ja`)**, **Tiếng Hàn (`ko`)**, **Tiếng Trung (`zh`)**.
 - Tùy chọn kích thước mô hình linh hoạt: `tiny`, `base`, `small`, `medium` và **`large-v3-turbo`** (mặc định, chính xác nhất).
 - **Silero VAD** chỉ đưa đoạn có giọng nói vào Whisper và cắt khúc ở chỗ ngắt nghỉ: không còn câu bịa ở chỗ im lặng, không cắt ngang giữa từ, không lặp vô tận.
-- Tùy chọn nhận dạng cả tiếng rên, thở, hét (イク, あっ...) không phải lời nói.
+- Tùy chọn nhận dạng cả tiếng rên, hét có phát âm (イク, あっ...) — kể cả tiếng rên nhỏ kiểu ASMR; tiếng thở, sột soạt, nhạc nền được lọc bỏ để không sinh phụ đề rác.
 
 ### 5. 🌐 Dịch thuật phụ đề song ngữ AI (NLLB offline & Ollama AI)
 - Dịch tự động lời thoại từ ngôn ngữ gốc sang Tiếng Việt hoặc ngôn ngữ đích khác, tạo phụ đề song ngữ hiển thị trực quan.
