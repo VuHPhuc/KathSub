@@ -25,7 +25,7 @@ const OWNER = 'VuHPhuc';
 const REPO = 'KathSub';
 const VERSION = pkg.version;
 const TAG = `v${VERSION}`;
-const RELEASE_NAME = `KathSub v${VERSION} — Nhập phụ đề có sẵn, dịch trực tiếp timeline, hủy tác vụ & quản lý cache model`;
+const RELEASE_NAME = `KathSub v${VERSION} — Khung phụ đề co giãn, model Anime tiếng Nhật & dịch theo thể loại video`;
 
 const RELEASE_DIR = path.join(PROJECT_ROOT, 'release');
 const NOTES_FILE = path.join(RELEASE_DIR, `RELEASE_NOTES_${VERSION}.md`);

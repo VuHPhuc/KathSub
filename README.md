@@ -20,8 +20,8 @@ Bạn có thể tải các bản phát hành chính thức trực tiếp tại m
 
 | Tên tệp | Loại | Mô tả |
 | :--- | :---: | :--- |
-| [**KathSub-Setup-1.4.1.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bộ cài đặt (Installer)** | Tự động cài đặt vào máy, tạo biểu tượng ngoài màn hình Desktop và menu Start. Khuyên dùng cho người dùng phổ thông. |
-| [**KathSub Portable 1.4.1.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bản Portable (Chạy ngay)** | Chỉ cần nhấp đúp là mở phần mềm ngay, không cần cài đặt, có thể chép vào USB mang đi mọi nơi. |
+| [**KathSub-Setup-1.4.3.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bộ cài đặt (Installer)** | Tự động cài đặt vào máy, tạo biểu tượng ngoài màn hình Desktop và menu Start. Khuyên dùng cho người dùng phổ thông. |
+| [**KathSub Portable 1.4.3.exe**](https://github.com/VuHPhuc/KathSub/releases) | **Bản Portable (Chạy ngay)** | Chỉ cần nhấp đúp là mở phần mềm ngay, không cần cài đặt, có thể chép vào USB mang đi mọi nơi. |
 
 > **Lưu ý trên máy tính cục bộ:** Các file `.exe` cài đặt cũng đã được đóng gói sẵn trong thư mục cục bộ tại:  
 > `d:\code\KathSub\release\`
@@ -52,6 +52,7 @@ Bạn có thể tải các bản phát hành chính thức trực tiếp tại m
 - Chạy offline 100% trong tiến trình chính (Node/Electron), bảo vệ quyền riêng tư và hoạt động mượt mà không cần GPU rời.
 - Hỗ trợ đa dạng ngôn ngữ: **Tiếng Việt (`vi`)**, **Tiếng Anh (`en`)**, **Tiếng Nhật (`ja`)**, **Tiếng Hàn (`ko`)**, **Tiếng Trung (`zh`)**.
 - Tùy chọn kích thước mô hình linh hoạt: `tiny`, `base`, `small`, `medium` và **`large-v3-turbo`** (mặc định, chính xác nhất).
+- Mô hình **Anime tiếng Nhật** (`whisper-ja-anime-v0.3`, ~1.7 GB): Whisper tinh chỉnh cho giọng anime / visual novel, nghe lời thoại khi đang rên, hét chuẩn hơn hẳn (chỉ tiếng Nhật).
 - **Silero VAD** chỉ đưa đoạn có giọng nói vào Whisper và cắt khúc ở chỗ ngắt nghỉ: không còn câu bịa ở chỗ im lặng, không cắt ngang giữa từ, không lặp vô tận.
 - Tùy chọn nhận dạng cả tiếng rên, hét có phát âm (イク, あっ...) — kể cả tiếng rên nhỏ kiểu ASMR; tiếng thở, sột soạt, nhạc nền được lọc bỏ để không sinh phụ đề rác.
 
@@ -59,6 +60,7 @@ Bạn có thể tải các bản phát hành chính thức trực tiếp tại m
 - Dịch tự động lời thoại từ ngôn ngữ gốc sang Tiếng Việt hoặc ngôn ngữ đích khác, tạo phụ đề song ngữ hiển thị trực quan.
 - **Dịch offline bằng NLLB (Transformers.js):** Hoạt động ngay trên CPU máy tính mà không cần kết nối Internet.
 - **Dịch qua Ollama AI cục bộ:** Kết nối linh hoạt với các mô hình ngôn ngữ lớn (LLM như Qwen 2.5, Qwen 3, Gemma 3, Llama 3...). Model đọc toàn bộ lời thoại trước (nhân vật, giới tính, xưng hô, bối cảnh), dịch từng lô kèm ngữ cảnh trước–sau, tự sửa lỗi nghe nhầm của Whisper, tự dịch lại dòng lệch và có thể soát lại bản dịch lần 2.
+- Chọn **Thể loại video** (Đời thường, Gaming & Esports, Anime/Manga, 18+/Thân mật, Meme/Gen Z) để AI dịch đúng tiếng lóng và thuật ngữ (vd game: "Reloading" → "Đang thay đạn").
 
 ### 6. 📦 Tích hợp cài đặt & quản lý Ollama 1-click ngay trong ứng dụng
 - Tự động kiểm tra trạng thái cài đặt Ollama trên máy tính.
