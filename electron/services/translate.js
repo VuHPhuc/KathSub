@@ -724,6 +724,84 @@ async function reviewTranslations({ texts, sources, translations, srcName, tgtNa
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
+// ─── Google Translate (online) ───────────────────────────────────────────────
+
+const GOOGLE_BATCH_CHARS = 1500; // keeps the GET URL well under Google's limit, even for Japanese (9 bytes / char encoded)
+
+// Google's codes differ from ours only for Chinese
+const googleCode = (code) => (code === 'zh' ? 'zh-CN' : code);
+
+// Free Google Translate endpoints. Each one rate-limits on its own (HTTP 429), so a limited one hands over to the next.
+const GOOGLE_ENDPOINTS = [
+  {
+    url: (sl, tl, q) => `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${q}`,
+    // [[["translated", "original", ...], ...], ...]: the translation comes in sentence pieces
+    parse: (data) => (data[0] || []).map((part) => part[0] || '').join(''),
+  },
+  {
+    url: (sl, tl, q) => `https://translate.google.com/translate_a/single?client=gtx&sl=${sl}&tl=${tl}&dt=t&q=${q}`,
+    parse: (data) => (data[0] || []).map((part) => part[0] || '').join(''),
+  },
+  {
+    url: (sl, tl, q) => `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${sl}&tl=${tl}&q=${q}`,
+    // ["translated"]
+    parse: (data) => (typeof data[0] === 'string' ? data[0] : data[0]?.[0] || ''),
+  },
+];
+let googleEndpoint = 0; // the one that answered last
+
+async function googleRequest(text, src, tgt, signal) {
+  const q = encodeURIComponent(text);
+  let status = 0;
+  for (let round = 1; round <= 3; round++) {
+    for (let k = 0; k < GOOGLE_ENDPOINTS.length; k++) {
+      const i = (googleEndpoint + k) % GOOGLE_ENDPOINTS.length;
+      const ep = GOOGLE_ENDPOINTS[i];
+      const res = await fetch(ep.url(googleCode(src), googleCode(tgt), q), { signal });
+      if (res.ok) {
+        googleEndpoint = i;
+        return ep.parse(await res.json());
+      }
+      status = res.status;
+      if (status !== 429) throw new Error(`Google Dịch lỗi ${status}`);
+    }
+    // Every endpoint is rate-limited: wait a little longer each round
+    await new Promise((r) => setTimeout(r, 2000 * round));
+    throwIfCancelled(signal);
+  }
+  throw new Error(`Google Dịch lỗi ${status}: máy chủ Google đang giới hạn lượt dịch, thử lại sau ít phút`);
+}
+
+// Lines are sent in batches joined by newlines; when Google returns a different number of lines (it merged or
+// split one), that batch is translated line by line instead so every subtitle keeps its own translation.
+async function translateWithGoogle(texts, srcLang, tgtLang, onProgress, signal) {
+  const out = new Array(texts.length).fill('');
+  // A subtitle's own line breaks are one sentence: send it as one line
+  const lines = texts.map((t) => t.replace(/\s*\n\s*/g, ' ').trim());
+  let i = 0;
+  while (i < lines.length) {
+    throwIfCancelled(signal);
+    let end = i;
+    let size = 0;
+    while (end < lines.length && (end === i || size + lines[end].length + 1 <= GOOGLE_BATCH_CHARS)) size += lines[end++].length + 1;
+    onProgress?.({ status: 'translating', done: i, total: lines.length, batchEnd: end });
+
+    const batch = lines.slice(i, end);
+    const reply = (await googleRequest(batch.join('\n'), srcLang, tgtLang, signal)).split('\n');
+    if (reply.length === batch.length) {
+      reply.forEach((t, k) => { out[i + k] = t.trim(); });
+    } else {
+      for (let k = 0; k < batch.length; k++) {
+        throwIfCancelled(signal);
+        out[i + k] = batch[k] ? (await googleRequest(batch[k], srcLang, tgtLang, signal)).trim() : '';
+      }
+    }
+    i = end;
+  }
+  onProgress?.({ status: 'translating', done: lines.length, total: lines.length });
+  return out;
+}
+
 // signal (optional): the job's AbortSignal; a cancelled run returns { cancelled: true } and keeps the loaded NLLB model
 async function translateSubtitles({ subtitles, sourceLang, targetLang, engine, ollamaModel, outputMode, review, genre }, onProgress, { signal } = {}) {
   try {
@@ -734,7 +812,7 @@ async function translateSubtitles({ subtitles, sourceLang, targetLang, engine, o
     if (src === targetLang) {
       return { success: true, subtitles, skipped: true };
     }
-    if (engine !== 'ollama' && (!NLLB_CODES[src] || !NLLB_CODES[targetLang])) {
+    if (engine === 'nllb' && (!NLLB_CODES[src] || !NLLB_CODES[targetLang])) {
       throw new Error(`NLLB chưa hỗ trợ dịch ${src} → ${targetLang}, hãy dùng Ollama`);
     }
 
@@ -755,6 +833,8 @@ async function translateSubtitles({ subtitles, sourceLang, targetLang, engine, o
     if (engine === 'ollama') {
       if (!ollamaModel) throw new Error('Chưa chọn model Ollama');
       ({ translations: translated, sources } = await translateWithOllama(texts, src, targetLang, ollamaModel, report, { review, genre, signal }));
+    } else if (engine === 'google') {
+      translated = await translateWithGoogle(texts, src, targetLang, report, signal);
     } else {
       translated = await translateWithNllb(texts, src, targetLang, report, signal);
     }

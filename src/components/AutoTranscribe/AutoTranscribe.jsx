@@ -617,6 +617,14 @@ export default function AutoTranscribe({ addToast }) {
                     >
                       Ollama LLM
                     </button>
+                    <button
+                      className={`seg-btn${engine === 'google' ? ' active' : ''}`}
+                      id="tab-engine-google"
+                      onClick={() => setEngine('google')}
+                      disabled={blocked}
+                    >
+                      Google
+                    </button>
                   </div>
                 </div>
 
@@ -644,7 +652,7 @@ export default function AutoTranscribe({ addToast }) {
               <div className="at-hint">
                 {engine === 'nllb'
                   ? t('nllbNote', uiLang)
-                  : t('ollamaNote', uiLang)}
+                  : engine === 'google' ? t('googleNote', uiLang) : t('ollamaNote', uiLang)}
                 {engine === 'nllb' && !ollamaReady && <> {t('ollamaHint', uiLang)}</>}
               </div>
 

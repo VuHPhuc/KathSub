@@ -492,6 +492,18 @@ html, body, #root {
   line-height: 1;
 }
 .vc-btn:hover { background: rgba(255,255,255,0.15); }
+.vc-rate {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: #fff;
+  font-size: 12px;
+  border-radius: 4px;
+  padding: 2px 4px;
+  margin-left: 8px;
+  cursor: pointer;
+  outline: none;
+}
+.vc-rate option { background: #1a1b1f; color: #fff; }
 
 /* ─── Subtitle Panel & Studio Inspector ──────────────────────────────────────── */
 .subtitle-panel {

@@ -3,6 +3,9 @@ import useStore from '../../store/subtitleStore';
 import SubtitleOverlay from '../SubtitleOverlay/SubtitleOverlay';
 import { loadPref, savePref } from '../../utils/prefs';
 
+// Speeds offered in the player; [ and ] step through them
+const PLAYBACK_RATES = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2];
+
 function formatTime(s) {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -36,6 +39,19 @@ export default function VideoPlayer({ addToast }) {
       vid.muted = isMuted;
     }
   }, [volume, isMuted, videoUrl]);
+
+  // Playback speed (slow motion helps timing fast lines); remembered like the volume
+  const [rate, setRate] = useState(() => loadPref('playbackRate', 1));
+  useEffect(() => {
+    savePref('playbackRate', rate);
+    const vid = videoRef.current;
+    if (vid) {
+      vid.defaultPlaybackRate = rate; // a newly loaded video starts at this speed
+      vid.playbackRate = rate;
+    }
+  }, [rate, videoUrl]);
+  const rateRef = useRef(rate);
+  rateRef.current = rate;
   const [videoDims, setVideoDims] = useState({ w: 0, h: 0, x: 0, y: 0 });
 
   // ── Video dimensions (for overlay positioning) ────────────────────────────────
@@ -226,6 +242,13 @@ export default function VideoPlayer({ addToast }) {
       } else if (e.code === 'ArrowRight') {
         e.preventDefault();
         skipRef.current && skipRef.current(5);
+      } else if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
+        // [ slower · ] faster, one step through PLAYBACK_RATES
+        e.preventDefault();
+        const i = PLAYBACK_RATES.indexOf(rateRef.current);
+        const next = PLAYBACK_RATES[Math.max(0, Math.min(PLAYBACK_RATES.length - 1, (i < 0 ? PLAYBACK_RATES.indexOf(1) : i) + (e.code === 'BracketLeft' ? -1 : 1)))];
+        rateRef.current = next; // a second key press before the re-render steps on from here
+        setRate(next);
       }
     };
     window.addEventListener('keydown', handler);
@@ -286,6 +309,17 @@ export default function VideoPlayer({ addToast }) {
           <span className="video-time">
             {formatTime(currentTime)} / {formatTime(dur || 0)}
           </span>
+
+          {/* Playback speed */}
+          <select
+            className="vc-rate"
+            id="vc-rate"
+            value={rate}
+            onChange={(e) => setRate(Number(e.target.value))}
+            title="Tốc độ phát / Playback speed ([ chậm hơn · ] nhanh hơn)"
+          >
+            {PLAYBACK_RATES.map((r) => <option key={r} value={r}>{r}×</option>)}
+          </select>
 
           <div style={{ flex: 1 }} />
 
