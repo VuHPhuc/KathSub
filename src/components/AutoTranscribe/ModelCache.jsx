@@ -16,6 +16,7 @@ function groupLabel(g, lang) {
   if (g.type === 'whisper') return `Whisper ${g.name}`;
   if (g.type === 'vad') return t('cacheVad', lang);
   if (g.type === 'nllb') return t('cacheNllb', lang);
+  if (g.type === 'ocr') return t('cacheOcr', lang);
   if (g.type === 'downloads') return t('cacheDownloads', lang);
   return t('cacheOther', lang);
 }

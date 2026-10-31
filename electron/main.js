@@ -409,6 +409,23 @@ ipcMain.handle('translate-subtitles', async (event, data) => {
   return runJob((signal) => translateService.translateSubtitles(data, (p) => sendTranscribeProgress(event, p), { signal }));
 });
 
+// ─── OCR (subtitles burned into the picture) ─────────────────────────────────
+
+let ocrService = null;
+try {
+  ocrService = require('./services/ocr');
+} catch (err) {
+  console.error('[OCR] Failed to load service:', err.message);
+}
+
+ipcMain.handle('ocr-video', async (event, { videoPath, language, region, engine, ollamaModel }) => {
+  if (!ocrService) return { success: false, error: 'OCR service not available' };
+  return runJob((signal) => ocrService.ocrVideo({ videoPath, language, region, engine, ollamaModel }, (p) => sendTranscribeProgress(event, p), { signal }));
+});
+
+// Installed Ollama models that can read text in pictures
+ipcMain.handle('ocr-vision-models', async () => (ocrService ? ocrService.listVisionModels() : []));
+
 // ─── Ollama setup ────────────────────────────────────────────────────────────
 
 let ollamaService = null;

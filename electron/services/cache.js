@@ -11,6 +11,7 @@ const { CACHE_DIR } = require('./models');
 const whisper = () => require('./whisper');
 const translate = () => require('./translate');
 const ollama = () => require('./ollama');
+const ocr = () => require('./ocr');
 
 // Resolve `rel` under `base`; throws when the result is `base` itself or escapes it (.., absolute, UNC,
 // other drive). A real name that only starts with dots ("..cache") is inside and allowed (REV-05).
@@ -32,6 +33,7 @@ function knownGroups() {
     ...Object.entries(MODEL_REPOS).map(([size, repo]) => ({ key: `whisper:${size}`, type: 'whisper', name: size, base: CACHE_DIR, entries: [repo] })),
     { key: 'vad', type: 'vad', name: 'Silero VAD', base: CACHE_DIR, entries: [VAD_REPO] },
     { key: 'nllb', type: 'nllb', name: 'NLLB-200 600M', base: CACHE_DIR, entries: [NLLB_MODEL] },
+    { key: 'ocr', type: 'ocr', name: 'Tesseract', base: CACHE_DIR, entries: [ocr().OCR_DIR] },
   ];
 }
 
@@ -54,6 +56,7 @@ async function otherEntries(known) {
       out.push(top.name);
       continue;
     }
+    if (knownRepos.has(path.normalize(top.name))) continue; // a group that is one folder (OCR data)
     let children;
     try {
       children = await readDirSafe(path.join(CACHE_DIR, top.name));

@@ -34,6 +34,10 @@ contextBridge.exposeInMainWorld('electron', {
   transcribeApi:   (data) => ipcRenderer.invoke('transcribe-api', data),
   transcribeLocal: (data) => ipcRenderer.invoke('transcribe-local', data),
 
+  // OCR: read subtitles burned into the video picture
+  ocrVideo:         (data) => ipcRenderer.invoke('ocr-video', data),
+  ocrVisionModels:  ()     => ipcRenderer.invoke('ocr-vision-models'),
+
   // Translate
   translateSubtitles: (data) => ipcRenderer.invoke('translate-subtitles', data),
 

@@ -1,6 +1,6 @@
 {
   "name": "kathsub",
-  "version": "1.4.3",
+  "version": "1.5.0",
   "description": "KathSub - Trình chỉnh sửa phụ đề video / Video Subtitle Editor",
   "main": "electron/main.js",
   "scripts": {
@@ -16,6 +16,7 @@
     "fluent-ffmpeg": "^2.1.2",
     "onnxruntime-node": "^1.21.0",
     "openai": "^4.52.0",
+    "tesseract.js": "^7.0.0",
     "zustand": "^4.5.4"
   },
   "devDependencies": {
@@ -43,7 +44,15 @@
       "output": "release"
     },
     "asarUnpack": [
-      "**/node_modules/ffmpeg-static/**/*"
+      "**/node_modules/ffmpeg-static/**/*",
+      "**/node_modules/tesseract.js/**/*",
+      "**/node_modules/tesseract.js-core/**/*",
+      "**/node_modules/regenerator-runtime/**/*",
+      "**/node_modules/is-url/**/*",
+      "**/node_modules/wasm-feature-detect/**/*",
+      "**/node_modules/bmp-js/**/*",
+      "**/node_modules/zlibjs/**/*",
+      "**/node_modules/idb-keyval/**/*"
     ],
     "files": [
       "dist/**/*",

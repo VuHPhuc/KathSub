@@ -16,6 +16,13 @@ const NLLB_CODES = {
   ja: 'jpn_Jpan',
   ko: 'kor_Hang',
   zh: 'zho_Hans',
+  es: 'spa_Latn',
+  fr: 'fra_Latn',
+  de: 'deu_Latn',
+  pt: 'por_Latn',
+  ru: 'rus_Cyrl',
+  th: 'tha_Thai',
+  id: 'ind_Latn',
 };
 
 const LANG_NAMES = {
@@ -24,6 +31,13 @@ const LANG_NAMES = {
   ja: 'Japanese',
   ko: 'Korean',
   zh: 'Chinese (Simplified)',
+  es: 'Spanish',
+  fr: 'French',
+  de: 'German',
+  pt: 'Portuguese',
+  ru: 'Russian',
+  th: 'Thai',
+  id: 'Indonesian',
 };
 
 // Whisper can detect ~100 languages; an LLM can translate any of them
@@ -73,6 +87,8 @@ function detectLang(texts) {
   if (/[぀-ヿ]/.test(sample)) return 'ja'; // Hiragana / Katakana
   if (/[가-힯]/.test(sample)) return 'ko'; // Hangul
   if (/[一-鿿]/.test(sample)) return 'zh'; // Han only
+  if (/[Ѐ-ӿ]/.test(sample)) return 'ru'; // Cyrillic
+  if (/[฀-๿]/.test(sample)) return 'th'; // Thai
   if (/[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i.test(sample)) return 'vi';
   return 'en';
 }

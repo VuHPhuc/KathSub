@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import useStore from '../../store/subtitleStore';
+import useStore, { DEFAULT_BOX_WIDTH, BOX_WIDTH_MIN } from '../../store/subtitleStore';
 import { t, errorMessage } from '../../locales';
 import OllamaSetup from './OllamaSetup';
 import ModelCache from './ModelCache';
@@ -15,6 +15,13 @@ const SOURCE_LANGS = [
   { code: 'zh',   labelKey: 'langZh' },
   { code: 'en',   labelKey: 'langEn' },
   { code: 'vi',   labelKey: 'langVi' },
+  { code: 'es',   labelKey: 'langEs' },
+  { code: 'fr',   labelKey: 'langFr' },
+  { code: 'de',   labelKey: 'langDe' },
+  { code: 'pt',   labelKey: 'langPt' },
+  { code: 'ru',   labelKey: 'langRu' },
+  { code: 'th',   labelKey: 'langTh' },
+  { code: 'id',   labelKey: 'langId' },
 ];
 const TARGET_LANGS = [
   { code: 'none', labelKey: 'noTranslate' },
@@ -23,7 +30,19 @@ const TARGET_LANGS = [
   { code: 'ja',   labelKey: 'langJa' },
   { code: 'ko',   labelKey: 'langKo' },
   { code: 'zh',   labelKey: 'langZh' },
+  { code: 'es',   labelKey: 'langEs' },
+  { code: 'fr',   labelKey: 'langFr' },
+  { code: 'de',   labelKey: 'langDe' },
+  { code: 'pt',   labelKey: 'langPt' },
+  { code: 'ru',   labelKey: 'langRu' },
+  { code: 'th',   labelKey: 'langTh' },
+  { code: 'id',   labelKey: 'langId' },
 ];
+
+// Where the burned-in subtitles sit (electron/services/ocr.js REGIONS)
+const OCR_REGIONS = ['bottom', 'bottomHalf', 'middle', 'top', 'full'];
+// Suggested Ollama model for reading subtitles (small, reads Japanese / Chinese / Korean text well)
+const VISION_MODEL = 'qwen2.5vl:3b';
 
 // Video genres the Ollama prompt knows (electron/services/translate.js GENRE_RULES)
 const GENRES = ['general', 'gaming', 'anime', 'adult', 'meme'];
@@ -39,7 +58,13 @@ export default function AutoTranscribe({ addToast }) {
   // 'transcribe': recognise speech in the video (then optionally translate) · 'translate': translate the timeline's subtitles
   const [jobMode,    setJobMode]    = useState(saved.jobMode ?? 'transcribe');
   const [existingSrcLang, setExistingSrcLang] = useState(saved.existingSrcLang ?? 'ja'); // no Whisper detection here
-  const [transcribeMode, setTranscribeMode] = useState(saved.transcribeMode); // 'cloud' | 'local'
+  const [transcribeMode, setTranscribeMode] = useState(saved.transcribeMode); // 'local' | 'cloud' | 'ocr'
+  const [ocrLang,    setOcrLang]    = useState(saved.ocrLang ?? 'en');        // OCR cannot detect the language
+  const [ocrRegion,  setOcrRegion]  = useState(saved.ocrRegion ?? 'bottom');
+  const [ocrEngine,  setOcrEngine]  = useState(saved.ocrEngine ?? 'tesseract'); // 'tesseract' | 'ollama'
+  const [ocrModel,   setOcrModel]   = useState(saved.ocrModel ?? '');          // Ollama vision model
+  const [visionModels, setVisionModels] = useState([]);
+  const [visionPull, setVisionPull] = useState(null); // { message, percent } while a vision model downloads
   const [apiKey,     setApiKey]     = useState('');
   const [modelSize,  setModelSize]  = useState(saved.modelSize);
   const [subLang,    setSubLang]    = useState(saved.subLang);
@@ -61,6 +86,7 @@ export default function AutoTranscribe({ addToast }) {
   const cancelRef = useRef(false);
 
   const translateExisting = jobMode === 'translate';
+  const ocrMode = transcribeMode === 'ocr';
   // A single-language model fixes the spoken language (the user's own choice is kept for the other models)
   const localLang = transcribeMode === 'local' ? MODEL_LANG[modelSize] : undefined;
   const translating = targetLang !== 'none';
@@ -74,7 +100,9 @@ export default function AutoTranscribe({ addToast }) {
       : !translating ? t('translateChooseTarget', uiLang)
         : existingSrcLang === targetLang ? t('translateSameLang', uiLang)
           : '';
-  const canStart = !blocked && !existingBlocker && !(translating && engine === 'ollama' && !ollamaReady);
+  const ocrModelReady = !!(ollama?.running && visionModels.includes(ocrModel));
+  const canStart = !blocked && !existingBlocker && !(translating && engine === 'ollama' && !ollamaReady)
+    && !(!translateExisting && ocrMode && ocrEngine === 'ollama' && !ocrModelReady);
 
   // Subscribe to transcribe/translate progress events
   useEffect(() => {
@@ -92,12 +120,37 @@ export default function AutoTranscribe({ addToast }) {
       // Keep the remembered model if it is still installed
       setOllamaModel((cur) => (res.models.includes(cur) ? cur : res.models[0] ?? ''));
     });
+    // Models that can read text in pictures (OCR with Ollama)
+    window.electron.ocrVisionModels?.().then((models) => {
+      if (!Array.isArray(models)) return;
+      setVisionModels(models);
+      setOcrModel((cur) => (models.includes(cur) ? cur : models[0] ?? ''));
+    });
   }, []);
   useEffect(() => refreshOllama(), [refreshOllama]);
 
   useEffect(() => {
-    savePref('transcribeOptions', { jobMode, existingSrcLang, transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review, genre });
-  }, [jobMode, existingSrcLang, transcribeMode, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review, genre]);
+    savePref('transcribeOptions', { jobMode, existingSrcLang, transcribeMode, ocrLang, ocrRegion, ocrEngine, ocrModel, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review, genre });
+  }, [jobMode, existingSrcLang, transcribeMode, ocrLang, ocrRegion, ocrEngine, ocrModel, modelSize, subLang, targetLang, engine, outputMode, ollamaModel, includeVocals, review, genre]);
+
+  // Download the recommended vision model for OCR (progress comes on the Ollama setup channel)
+  useEffect(() => {
+    if (!visionPull) return undefined;
+    return window.electron.on('ollama-setup-progress', (p) => setVisionPull({ message: p.message ?? '', percent: p.percent ?? 0 }));
+  }, [!!visionPull]); // eslint-disable-line react-hooks/exhaustive-deps
+  const handlePullVision = async () => {
+    setVisionPull({ message: '', percent: 0 });
+    setSetupBusy(true);
+    try {
+      const res = await window.electron.ollamaPull(VISION_MODEL);
+      if (!res.success) addToast(`${t('error', uiLang)}: ${errorMessage(res, uiLang)}`, 'error');
+      else setOcrModel(VISION_MODEL);
+    } finally {
+      setVisionPull(null);
+      setSetupBusy(false);
+      refreshOllama();
+    }
+  };
 
   // Throws a `cancelled` error when the user pressed Cancel or the step reports it was cancelled
   const checkCancelled = (res) => {
@@ -186,23 +239,40 @@ export default function AutoTranscribe({ addToast }) {
     }
 
     await runJob(async () => {
-      // Step 1: Extract audio + transcribe
-      setStep(`${t('step', uiLang)} 1/${totalSteps} · ${t('stepTranscribe', uiLang)}`);
-      setProgress({ message: t('extractingAudio', uiLang), percent: 2 });
+      // Step 1: read the burned-in subtitles, or extract audio + transcribe
+      setStep(`${t('step', uiLang)} 1/${totalSteps} · ${t(ocrMode ? 'stepOcr' : 'stepTranscribe', uiLang)}`);
+      let result;
+      if (ocrMode) {
+        setProgress({ message: t('preparingOcr', uiLang), percent: 0 });
+        result = await window.electron.ocrVideo({ videoPath, language: ocrLang, region: ocrRegion, engine: ocrEngine, ollamaModel: ocrModel });
+        checkCancelled(result);
+        if (!result.success) throw new Error(errorMessage(result, uiLang));
+        if (!result.subtitles.length) throw new Error(t('noOcrText', uiLang));
+      } else {
+        setProgress({ message: t('extractingAudio', uiLang), percent: 2 });
+        const audioResult = await window.electron.extractAudio(videoPath);
+        checkCancelled(audioResult);
+        if (!audioResult.success) throw new Error(errorMessage(audioResult, uiLang));
 
-      const audioResult = await window.electron.extractAudio(videoPath);
-      checkCancelled(audioResult);
-      if (!audioResult.success) throw new Error(errorMessage(audioResult, uiLang));
+        result = transcribeMode === 'cloud'
+          ? await window.electron.transcribeApi({ audioPath: audioResult.audioPath, apiKey: apiKey.trim(), language: subLang })
+          : await window.electron.transcribeLocal({ audioPath: audioResult.audioPath, modelSize, language: subLang, includeVocals });
+        checkCancelled(result);
+        if (!result.success) throw new Error(errorMessage(result, uiLang));
+        if (!result.subtitles.length) throw new Error(t('noSpeech', uiLang));
+      }
 
-      let result = transcribeMode === 'cloud'
-        ? await window.electron.transcribeApi({ audioPath: audioResult.audioPath, apiKey: apiKey.trim(), language: subLang })
-        : await window.electron.transcribeLocal({ audioPath: audioResult.audioPath, modelSize, language: subLang, includeVocals });
-      checkCancelled(result);
-      if (!result.success) throw new Error(errorMessage(result, uiLang));
-      if (!result.subtitles.length) throw new Error(t('noSpeech', uiLang));
-
-      // Generated lines use the font / style the user last set
-      let subtitles = result.subtitles.map((s) => ({ ...s, ...subtitleStyle }));
+      // Generated lines use the font / style the user last set. Read-off-the-picture lines keep the place the
+      // original was in (left, right, top...), narrowed so a line near the edge stays inside the video.
+      let subtitles = result.subtitles.map((s) => (ocrMode
+        ? {
+          ...s,
+          ...subtitleStyle,
+          x: s.x,
+          y: s.y,
+          boxWidth: Math.max(BOX_WIDTH_MIN, Math.min(subtitleStyle.boxWidth ?? DEFAULT_BOX_WIDTH, 2 * Math.min(s.x, 100 - s.x))),
+        }
+        : { ...s, ...subtitleStyle }));
 
       // Step 2: Translate
       if (translating) {
@@ -273,7 +343,7 @@ export default function AutoTranscribe({ addToast }) {
         {/* Step 1 — speech recognition */}
         {!translateExisting && (
         <section className="at-section">
-          <div className="at-section-title"><span className="at-step-num">1</span>{t('stepTranscribe', uiLang)}</div>
+          <div className="at-section-title"><span className="at-step-num">1</span>{t(ocrMode ? 'stepOcr' : 'stepTranscribe', uiLang)}</div>
 
           <div className="segmented-btn-group at-seg">
             <button
@@ -292,8 +362,83 @@ export default function AutoTranscribe({ addToast }) {
             >
               {t('cloudMode', uiLang)}
             </button>
+            <button
+              className={`seg-btn${ocrMode ? ' active' : ''}`}
+              id="tab-ocr"
+              onClick={() => setTranscribeMode('ocr')}
+              disabled={running}
+            >
+              {t('ocrMode', uiLang)}
+            </button>
           </div>
 
+          {ocrMode ? (
+            <div className="at-grid">
+              <label className="at-field">
+                <span className="at-label">{t('subtitleLanguage', uiLang)}</span>
+                <select
+                  className="studio-select"
+                  id="select-ocr-lang"
+                  value={ocrLang}
+                  onChange={(e) => setOcrLang(e.target.value)}
+                  disabled={running}
+                >
+                  {SOURCE_LANGS.filter((l) => l.code !== 'auto').map((l) => (
+                    <option key={l.code} value={l.code}>{t(l.labelKey, uiLang)}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="at-field">
+                <span className="at-label">{t('ocrRegion', uiLang)}</span>
+                <select
+                  className="studio-select"
+                  id="select-ocr-region"
+                  value={ocrRegion}
+                  onChange={(e) => setOcrRegion(e.target.value)}
+                  disabled={running}
+                >
+                  {OCR_REGIONS.map((r) => (
+                    <option key={r} value={r}>{t(`ocrRegion_${r}`, uiLang)}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="at-field">
+                <span className="at-label">{t('ocrEngine', uiLang)}</span>
+                <div className="segmented-btn-group at-seg">
+                  <button
+                    className={`seg-btn${ocrEngine === 'tesseract' ? ' active' : ''}`}
+                    id="tab-ocr-tesseract"
+                    onClick={() => setOcrEngine('tesseract')}
+                    disabled={blocked}
+                  >
+                    Tesseract
+                  </button>
+                  <button
+                    className={`seg-btn${ocrEngine === 'ollama' ? ' active' : ''}`}
+                    id="tab-ocr-ollama"
+                    onClick={() => setOcrEngine('ollama')}
+                    disabled={blocked}
+                  >
+                    Ollama AI
+                  </button>
+                </div>
+              </div>
+              {ocrEngine === 'ollama' && visionModels.length > 0 && (
+                <label className="at-field">
+                  <span className="at-label">{t('ocrModel', uiLang)}</span>
+                  <select
+                    className="studio-select"
+                    id="select-ocr-model"
+                    value={ocrModel}
+                    onChange={(e) => setOcrModel(e.target.value)}
+                    disabled={blocked}
+                  >
+                    {visionModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </label>
+              )}
+            </div>
+          ) : (
           <div className="at-grid">
             {transcribeMode === 'local' ? (
               <label className="at-field">
@@ -341,6 +486,7 @@ export default function AutoTranscribe({ addToast }) {
               </select>
             </label>
           </div>
+          )}
 
           {transcribeMode === 'local' && (
             <div className="switch-row at-switch">
@@ -360,8 +506,30 @@ export default function AutoTranscribe({ addToast }) {
 
           <div className="at-hint">
             {localLang && <>{t('animeModelNote', uiLang)} </>}
-            {transcribeMode === 'local' ? t('localNote', uiLang) : t('cloudNote', uiLang)}
+            {ocrMode ? t('ocrNote', uiLang) : transcribeMode === 'local' ? t('localNote', uiLang) : t('cloudNote', uiLang)}
+            {ocrMode && <> {t(ocrEngine === 'ollama' ? 'ocrOllamaNote' : 'ocrTesseractNote', uiLang)}</>}
           </div>
+
+          {/* Ollama OCR needs Ollama running and a model that can see pictures */}
+          {ocrMode && ocrEngine === 'ollama' && !ocrModelReady && (
+            <div className="at-error">
+              {!ollama?.running
+                ? t('ocrOllamaNotRunning', uiLang)
+                : visionPull
+                  ? (visionPull.message || t('processing', uiLang))
+                  : t('ocrNoVisionModel', uiLang).replace('{model}', () => VISION_MODEL)}
+              {ollama?.running && !visionPull && (
+                <button className="btn btn-primary at-inline-btn" id="btn-pull-vision" onClick={handlePullVision} disabled={blocked}>
+                  ⬇ {t('ollamaPull', uiLang)} {VISION_MODEL}
+                </button>
+              )}
+              {visionPull && (
+                <div className="tb-prog-outer at-progress-bar">
+                  <div className="tb-prog-inner" style={{ width: `${visionPull.percent}%` }} />
+                </div>
+              )}
+            </div>
+          )}
         </section>
         )}
 
@@ -571,7 +739,9 @@ export default function AutoTranscribe({ addToast }) {
               ? '⏳ ' + t('processing', uiLang)
               : translateExisting
                 ? '🌐 ' + t('startTranslateExisting', uiLang)
-                : '🎙 ' + t(translating ? 'startTranscribeTranslate' : 'startTranscribe', uiLang)}
+                : ocrMode
+                  ? '🔤 ' + t(translating ? 'startOcrTranslate' : 'startOcr', uiLang)
+                  : '🎙 ' + t(translating ? 'startTranscribeTranslate' : 'startTranscribe', uiLang)}
           </button>
         </div>
       </div>
